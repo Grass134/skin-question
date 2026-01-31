@@ -5,3 +5,4 @@ numpy>=1.24.0
 # 如果代码用到了其他库，比如 sklearn/pillow，都加在这里
 scikit-learn>=1.2.0
 pillow>=10.0.0
+matplotlib>=3.8.0
