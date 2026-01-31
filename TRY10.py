@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 import requests
+import io  # 新增：解决Pandas版本问题的关键导入
 
 # === 核心配置 ===
 st.set_option('client.showErrorDetails', False)
@@ -18,7 +19,7 @@ GITHUB_REPO = "skin-question"
 GOLD_TXT = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/main/boosted_final_detail4.UTF-8.txt"
 RESULT_CSV = f"/tmp/diagnosis_results_{uuid.uuid4().hex[:6]}.csv"
 
-# 疾病标签映射（对应图1的病种编码）
+# 疾病标签映射
 DISEASE_LABELS = {
     "MEL": "黑色素瘤", "NV": "痣（色素痣）", "BCC": "基底细胞癌", "AK": "光化性角化病",
     "BKL": "良性角化病（脂溢性角化等）", "DF": "皮肤纤维瘤", "VASC": "血管病变", "SCC": "鳞状细胞癌",
@@ -53,12 +54,13 @@ def init_session_state():
         if key not in st.session_state:
             st.session_state[key] = value
 
-# === 数据加载 ===
+# === 数据加载（修复Pandas版本问题） ===
 @st.cache_data
 def load_gold_data():
     try:
         response = requests.get(GOLD_TXT, timeout=15)
-        df = pd.read_csv(pd.compat.StringIO(response.text), encoding="utf-8")
+        # 替换为io.StringIO，解决pd.compat的问题
+        df = pd.read_csv(io.StringIO(response.text), encoding="utf-8")
     except Exception as e:
         st.error(f"⚠️ 数据加载失败：{str(e)}")
         st.stop()
@@ -115,40 +117,34 @@ def reset_test_state():
     st.session_state.final_conf = 5
     st.session_state.time_baseline = 0
 
-# === 医生信息采集（补充专科背景） ===
+# === 医生信息采集 ===
 def profile_step():
     st.title("🩺 皮肤病AI辅助诊断研究")
     st.subheader("第一步：医生信息采集（匿名）")
     
     with st.form("profile_form", clear_on_submit=True):
-        # 机构层级
         hospital_level = st.selectbox(
             "1. 医院等级", 
             ["三甲医院（含专科医生）", "二级医院（含专科医生）", "社区医院（含规培/实习生）"]
         )
-        # 经验水平
         work_years = st.selectbox(
             "2. 工作年限", 
             ["≤5年（低年限）", "5-15年", ">15年（高年限）"]
         )
-        # 专科背景
         specialty = st.selectbox(
             "3. 专科背景", 
             ["皮肤病专科医生", "非皮肤病专科医生"]
         )
-        # 接诊量
         daily_patients = st.selectbox(
             "4. 日均接诊量", 
             ["≤10例", "10-20例", ">20例"]
         )
-        # 技术态度
         prior_ai_trust = st.slider(
             "5. 实验前对AI辅助诊断的信任度", 
             1, 5, 3
         )
         
         if st.form_submit_button("✅ 提交信息并开始测试"):
-            # 生成带前缀的ID
             level_prefix = {
                 "三甲医院（含专科医生）": "A",
                 "二级医院（含专科医生）": "B",
@@ -156,21 +152,18 @@ def profile_step():
             }[hospital_level]
             st.session_state.doctor_id = f"{level_prefix}_DR_{uuid.uuid4().hex[:6].upper()}"
             
-            # 保存医生信息（覆盖图2的“医生需要填什么”）
             st.session_state.doctor_info = {
                 "doctor_id": st.session_state.doctor_id,
                 "hospital_level": hospital_level,
                 "work_years": work_years,
-                "specialty": specialty,  # 新增：专科背景
+                "specialty": specialty,
                 "daily_patients": daily_patients,
                 "prior_ai_trust": prior_ai_trust,
                 "start_time": time.strftime("%Y-%m-%d %H:%M:%S")
             }
             
-            # 加载测试集（可扩展：根据工作年限调整题目难度）
             try:
                 gold_df = load_gold_data()
-                # 可选：给高年限医生增加“陷阱题”（AI错误的题目）
                 if ">15年" in work_years:
                     more_trap = gold_df[~gold_df["ai_correct"]].sample(min(2, len(gold_df[~gold_df["ai_correct"]])))
                     gold_df = pd.concat([gold_df, more_trap]).drop_duplicates()
@@ -180,7 +173,7 @@ def profile_step():
             except Exception as e:
                 st.error(f"测试数据加载失败：{str(e)}")
 
-# === 答题流程（适配图2的交互动作） ===
+# === 答题流程 ===
 def test_step():
     if st.session_state.test_set is None:
         st.error("⚠️ 测试数据未加载，请返回重新开始")
@@ -216,11 +209,9 @@ def test_step():
     col1, col2 = st.columns([1, 1])
     with col1:
         st.markdown("### 第一阶段：独立诊断")
-        # 独立诊断1/2/3项（下拉菜单）
         top1 = st.selectbox("首选 (Top-1)", ["请选择"] + ALL_CLASSES, key=f"t1_{idx}")
         top2 = st.selectbox("次选 (Top-2)", ["请选择"] + ALL_CLASSES, key=f"t2_{idx}")
         top3 = st.selectbox("备选 (Top-3)", ["请选择"] + ALL_CLASSES, key=f"t3_{idx}")
-        # 初始信心评分（滑块）
         conf_init = st.slider("初始信心自评（1-10分）", 1, 10, 5, key=f"c1_{idx}")
         choices = [top1, top2, top3]
         is_valid = "请选择" not in choices and len(set(choices)) == 3
@@ -247,14 +238,12 @@ def test_step():
             interaction_type = "一致" if initial_top1 == ai_sug else "冲突"
             
             st.markdown("#### 交互动作选择")
-            # 交互动作（坚持/替换/增加）
             action = st.radio(
                 "您希望如何处理AI建议？",
                 ["坚持原诊断", "替换为AI建议", "增加AI建议至Top4"],
                 key=f"act_{idx}"
             )
             
-            # 根据交互动作生成最终诊断
             final_top1 = initial_top1
             final_top2 = st.session_state.initial_top[1]
             final_top3 = st.session_state.initial_top[2]
@@ -264,7 +253,6 @@ def test_step():
             elif action == "增加AI建议至Top4":
                 final_top4 = ai_sug
             
-            # 最终信心评分（滑块）
             conf_final = st.slider("最终信心自评（1-10分）", 1, 10, st.session_state.initial_conf, key=f"c2_{idx}")
             
             if st.button("✅ 确认结果并进入下一题"):
@@ -281,7 +269,6 @@ def test_step():
                 is_final_top4_correct = (true_label in final_options)
                 use_ai = 1 if action != "坚持原诊断" else 0
                 
-                # 决策路径与误导/纠正标记
                 initial_correct = (initial_top1 == true_label)
                 final_correct = (final_top1 == true_label)
                 decision_path = ""
@@ -298,7 +285,6 @@ def test_step():
                 else:
                     decision_path = "盲从"
                 
-                # 组装结果（覆盖图3需记录的数据）
                 result = {
                     **st.session_state.doctor_info,
                     "image_id": current_data["image_id"],
@@ -335,7 +321,7 @@ def test_step():
                 st.session_state.current_idx += 1
                 st.rerun()
 
-# === 结果展示（覆盖所有需画图的需求） ===
+# === 结果展示 ===
 def result_step():
     st.title("🏁 测试完成！研究数据可视化报告")
     results = st.session_state.user_results
@@ -348,7 +334,6 @@ def result_step():
     
     df = pd.DataFrame(results)
     
-    # 1. 三甲vs社区的准确率（机构层级假设）
     st.subheader("1. 机构层级：三甲vs社区的诊断准确率")
     hospital_group = df.groupby("hospital_level").agg(
         initial_top1=("is_initial_top1_correct", "mean"),
@@ -373,7 +358,6 @@ def result_step():
     ax2.legend()
     st.pyplot(fig)
 
-    # 2. 低/高年限医生的准确率+AI使用频率（经验水平假设）
     st.subheader("2. 经验水平：低/高年限医生的表现")
     df["year_group"] = df["work_years"].map(lambda x: "低年限" if "≤5年" in x else "高年限" if ">15年" in x else "中年限")
     year_group = df[df["year_group"].isin(["低年限", "高年限"])].groupby("year_group").agg(
@@ -390,23 +374,20 @@ def result_step():
     ax2.set_title("AI使用频率（低/高年限）")
     st.pyplot(fig)
 
-    # 3. 接诊量与AI依赖度（接诊量假设）
-    st.subheader("3. 接诊量：医生的AI依赖度")
+    st.subheader("3. 接诊量与AI依赖度")
     load_group = df.groupby("daily_patients")["use_ai"].mean().reset_index()
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.bar(load_group["daily_patients"], load_group["use_ai"], color="#4285F4")
     ax.set_title("不同接诊量医生的AI依赖度")
     st.pyplot(fig)
 
-    # 4. 初始信任度与AI采纳率（技术态度假设）
-    st.subheader("4. 技术态度：初始信任度与AI采纳率")
+    st.subheader("4. 初始信任度与AI采纳率")
     trust_group = df.groupby("prior_ai_trust")["use_ai"].mean().reset_index()
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.plot(trust_group["prior_ai_trust"], trust_group["use_ai"], marker="o", color="#34A853")
     ax.set_title("初始信任度与AI采纳率的关系")
     st.pyplot(fig)
 
-    # 数据导出
     st.subheader("💾 完整研究数据导出")
     if st.button("导出全部数据CSV"):
         try:
