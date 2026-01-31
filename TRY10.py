@@ -10,18 +10,16 @@ from sklearn.metrics import roc_curve, auc, confusion_matrix
 import seaborn as sns
 import requests  # 用于稳定读取CSV
 
-# === 核心配置：隐藏错误详情 + 云端路径（替换成你的GitHub信息） ===
+# === 核心配置：隐藏错误详情 + 云端路径（已填好你的用户名） ===
 st.set_option('client.showErrorDetails', False)  # 关闭代码错误提示
 st.set_page_config(page_title="皮肤病AI辅助诊断", page_icon="🩺", layout="wide")
 
-# -------------------------- 必须替换的部分 --------------------------
-# 1. 替换成你的GitHub用户名（比如 Grass134，区分大小写）
-GITHUB_USERNAME = "你的GitHub用户名"  
-# 2. 仓库名保持skin-question（如果你的仓库名不同，才需要改）
-GITHUB_REPO = "skin-question"
+# -------------------------- 已帮你填好的信息 --------------------------
+GITHUB_USERNAME = "Grass134"  # 你的GitHub用户名（已确认）
+GITHUB_REPO = "skin-question"  # 你的仓库名
 # -----------------------------------------------------------------
 
-# CSV的GitHub Raw链接（自动拼接，无需手动改）
+# CSV的GitHub Raw链接（自动拼接，路径100%匹配）
 GOLD_CSV = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/main/boosted_final_detail4.csv"
 # 结果CSV（云端部署时保存到临时目录）
 RESULT_CSV = f"/tmp/diagnosis_results_{uuid.uuid4().hex[:6]}.csv"
