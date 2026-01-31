@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 from sklearn.metrics import roc_curve, auc, confusion_matrix
 import seaborn as sns
+import requests  # 新增：用于下载CSV并自动检测编码
 
 # === 核心配置：隐藏错误详情 + 云端路径（替换成你的GitHub信息） ===
 st.set_option('client.showErrorDetails', False)  # 关闭代码错误提示
@@ -56,18 +57,23 @@ def init_session_state():
         if key not in st.session_state:
             st.session_state[key] = value
 
-# === 2. 数据加载（适配GitHub云端读取，移除timeout参数） ===
+# === 2. 数据加载（终极兼容版：自动检测编码，无需转码） ===
 @st.cache_data
 def load_gold_data():
-    # 容错1：读取GitHub CSV（移除timeout参数，解决版本兼容问题）
+    # 容错1：读取GitHub CSV（自动检测编码，兼容所有格式）
     try:
-        df = pd.read_csv(GOLD_CSV, encoding="utf-8")
-    except UnicodeDecodeError:
-        df = pd.read_csv(GOLD_CSV, encoding="gbk")
-    except Exception as e:
-        st.error(f"⚠️ 读取云端CSV失败：{str(e)}")
-        st.error("请检查：1.GitHub用户名/仓库名是否正确 2.CSV文件是否上传到仓库根目录")
-        st.stop()
+        # 先下载文件，自动检测编码
+        response = requests.get(GOLD_CSV, timeout=10)
+        response.encoding = response.apparent_encoding  # 自动识别编码
+        df = pd.read_csv(pd.compat.StringIO(response.text))
+    except Exception as e1:
+        # 兜底方案：忽略编码错误读取
+        try:
+            df = pd.read_csv(GOLD_CSV, encoding_errors='ignore')
+        except Exception as e2:
+            st.error(f"⚠️ 读取云端CSV失败：{str(e2)}")
+            st.error("请检查：1.GitHub用户名/仓库名是否正确 2.CSV文件是否上传到仓库根目录")
+            st.stop()
     
     # 容错2：检查必要字段
     required_cols = ["image_id", "Top1_预测", "真实病名", "image_url"]  # 新增image_url列
