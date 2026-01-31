@@ -6,34 +6,28 @@ import time
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
-from sklearn.metrics import roc_curve, auc, confusion_matrix
-import seaborn as sns
-import requests  # 用于稳定读取CSV
+import requests
 
-# === 核心配置：隐藏错误详情 + 云端路径（已填好你的用户名） ===
-st.set_option('client.showErrorDetails', False)  # 关闭代码错误提示
-st.set_page_config(page_title="皮肤病AI辅助诊断", page_icon="🩺", layout="wide")
+# === 核心配置 ===
+st.set_option('client.showErrorDetails', False)
+st.set_page_config(page_title="皮肤病AI辅助诊断研究", page_icon="🩺", layout="wide")
 
-# -------------------------- 已帮你填好的信息 --------------------------
-GITHUB_USERNAME = "Grass134"  # 你的GitHub用户名（已确认）
-GITHUB_REPO = "skin-question"  # 你的仓库名
-# -----------------------------------------------------------------
-
-# CSV的GitHub Raw链接（自动拼接，路径100%匹配）
-GOLD_CSV = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/main/boosted_final_detail4.csv"
-# 结果CSV（云端部署时保存到临时目录）
+# 你的GitHub信息
+GITHUB_USERNAME = "Grass134"
+GITHUB_REPO = "skin-question"
+GOLD_TXT = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/main/boosted_final_detail4.UTF-8.txt"
 RESULT_CSV = f"/tmp/diagnosis_results_{uuid.uuid4().hex[:6]}.csv"
 
-# 疾病标签映射
+# 疾病标签映射（对应图1的病种编码）
 DISEASE_LABELS = {
-    "MEL": "黑色素瘤", "NV": "痣", "BCC": "基底细胞癌", "AK": "光化性角化病",
-    "BKL": "良性角化病", "DF": "皮肤纤维瘤", "VASC": "血管病变", "SCC": "鳞状细胞癌",
-    "Vitiligo": "白癜风", "Pityrasis-Alba": "白色糠疹", "Psoriasis": "银屑病"
+    "MEL": "黑色素瘤", "NV": "痣（色素痣）", "BCC": "基底细胞癌", "AK": "光化性角化病",
+    "BKL": "良性角化病（脂溢性角化等）", "DF": "皮肤纤维瘤", "VASC": "血管病变", "SCC": "鳞状细胞癌",
+    "Vitiligo": "白癜风", "Pityrasis-Alba": "白色糠疹", "Psoriasis": "银屑病", "UNK": "未知类别"
 }
 ALL_CLASSES = list(DISEASE_LABELS.values())
-TEST_COUNT = 10  # 固定10道题
+TEST_COUNT = 10
 
-# === 1. 会话状态初始化（全量初始化，避免未定义错误） ===
+# === 会话状态初始化 ===
 def init_session_state():
     default_states = {
         "step": "profile",
@@ -46,86 +40,60 @@ def init_session_state():
         "initial_top": ["请选择", "请选择", "请选择"],
         "initial_conf": 5,
         "final_top1": "",
+        "final_top2": "",
+        "final_top3": "",
+        "final_top4": "",
         "final_decision": "",
         "final_conf": 5,
         "question_start": 0,
-        "doctor_id": f"DR_{uuid.uuid4().hex[:6].upper()}"
+        "time_baseline": 0,
+        "doctor_id": ""
     }
     for key, value in default_states.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
-# === 2. 数据加载（终极兼容版：强制适配所有中文CSV编码） ===
+# === 数据加载 ===
 @st.cache_data
 def load_gold_data():
-    # 步骤1：尝试所有常见中文编码，确保能读取你的CSV
-    encodings = ["utf-8", "gbk", "gb2312", "gb18030", "latin-1"]  # 覆盖所有中文编码
-    df = None
-    for enc in encodings:
-        try:
-            # 先下载CSV文件，再指定编码读取（避免GitHub Raw的编码坑）
-            response = requests.get(GOLD_CSV, timeout=15)
-            response.encoding = enc  # 强制指定编码
-            df = pd.read_csv(pd.compat.StringIO(response.text))
-            break  # 读取成功则退出循环
-        except Exception:
-            continue
-    
-    # 步骤2：编码全部失败的兜底提示
-    if df is None:
-        st.error("⚠️ 读取CSV失败：所有编码格式均不兼容")
-        st.error("临时解决方案：将CSV用记事本打开，另存为「UTF-8」编码后重新上传")
+    try:
+        response = requests.get(GOLD_TXT, timeout=15)
+        df = pd.read_csv(pd.compat.StringIO(response.text), encoding="utf-8")
+    except Exception as e:
+        st.error(f"⚠️ 数据加载失败：{str(e)}")
         st.stop()
     
-    # 步骤3：检查CSV必须字段（确保和你的文件匹配）
     required_cols = ["image_id", "Top1_预测", "真实病名", "image_url"]
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
-        st.error(f"⚠️ CSV缺少必要字段：{', '.join(missing_cols)}")
-        st.error("请检查你的CSV是否包含这些列：image_id、Top1_预测、真实病名、image_url")
+        st.error(f"⚠️ 缺失字段：{', '.join(missing_cols)}")
         st.stop()
     
-    # 步骤4：处理标签映射（转成中文标签）
     df["true_cn"] = df["真实病名"].map(DISEASE_LABELS).fillna("未知")
     df["ai_cn"] = df["Top1_预测"].map(DISEASE_LABELS).fillna("未知")
     df["ai_correct"] = df["true_cn"] == df["ai_cn"]
-    
-    # 步骤5：过滤有效数据（排除未知标签）
     df = df[df["true_cn"] != "未知"]
     df = df[df["ai_cn"] != "未知"]
-    
-    # 步骤6：检查数据量是否足够
     if len(df) < TEST_COUNT:
-        st.error(f"⚠️ 有效数据不足：至少需要{TEST_COUNT}条，当前仅{len(df)}条")
+        st.error(f"⚠️ 有效数据不足{TEST_COUNT}条")
         st.stop()
-    
     return df
 
 @st.cache_data
 def load_balanced_test_set(df):
-    # 平衡抽取：6条AI正确，4条AI错误
     ai_correct = df[df["ai_correct"]]
     ai_incorrect = df[~df["ai_correct"]]
-    
-    # 容错：如果某类数据不足，用另一类补充
     correct_sample = ai_correct.sample(min(6, len(ai_correct)))
     incorrect_sample = ai_incorrect.sample(min(4, len(ai_incorrect)))
-    
-    # 补充不足的数量
     if len(correct_sample) < 6:
-        add_sample = ai_correct.sample(6 - len(correct_sample))
-        correct_sample = pd.concat([correct_sample, add_sample])
+        correct_sample = pd.concat([correct_sample, ai_correct.sample(6 - len(correct_sample))])
     if len(incorrect_sample) < 4:
-        add_sample = ai_incorrect.sample(4 - len(incorrect_sample))
-        incorrect_sample = pd.concat([incorrect_sample, add_sample])
-    
+        incorrect_sample = pd.concat([incorrect_sample, ai_incorrect.sample(4 - len(incorrect_sample))])
     test_set = pd.concat([correct_sample, incorrect_sample]).sample(frac=1).reset_index(drop=True)
-    
     return test_set.head(TEST_COUNT)
 
-# === 3. 辅助函数 ===
+# === 辅助函数 ===
 def save_result(result):
-    """保存结果（云端部署时保存到临时目录）"""
     try:
         df = pd.DataFrame([result])
         if not os.path.exists(RESULT_CSV):
@@ -133,54 +101,87 @@ def save_result(result):
         else:
             df.to_csv(RESULT_CSV, mode="a", header=False, index=False, encoding="utf-8-sig")
     except Exception as e:
-        st.warning(f"结果本地保存失败（不影响答题）：{str(e)}")
-        # 云端部署时，结果仍会保存在session中，可通过下载按钮导出
+        st.warning(f"结果保存失败：{str(e)}")
 
 def reset_test_state():
-    """重置单题状态，避免状态污染"""
     st.session_state.show_ai = False
     st.session_state.initial_top = ["请选择", "请选择", "请选择"]
     st.session_state.initial_conf = 5
     st.session_state.final_top1 = ""
+    st.session_state.final_top2 = ""
+    st.session_state.final_top3 = ""
+    st.session_state.final_top4 = ""
     st.session_state.final_decision = ""
     st.session_state.final_conf = 5
+    st.session_state.time_baseline = 0
 
-# === 4. 步骤1：医生信息采集 ===
+# === 医生信息采集（补充专科背景） ===
 def profile_step():
     st.title("🩺 皮肤病AI辅助诊断研究")
     st.subheader("第一步：医生信息采集（匿名）")
     
     with st.form("profile_form", clear_on_submit=True):
-        st.info(f"📌 您的匿名编号：**{st.session_state.doctor_id}**")
-        
-        hospital_level = st.selectbox("1. 医院等级", ["三甲医院", "二级医院", "社区医院/基层"])
-        work_years = st.selectbox("2. 工作年限", ["≤3年", "3-10年", ">10年"])
-        monthly_cases = st.selectbox("3. 月接诊量（皮肤病）", ["≤30例", "30-100例", ">100例"])
-        ai_trust = st.slider("4. 对AI辅助诊断的初始信任度（1-5分）", 1, 5, 3)
+        # 机构层级
+        hospital_level = st.selectbox(
+            "1. 医院等级", 
+            ["三甲医院（含专科医生）", "二级医院（含专科医生）", "社区医院（含规培/实习生）"]
+        )
+        # 经验水平
+        work_years = st.selectbox(
+            "2. 工作年限", 
+            ["≤5年（低年限）", "5-15年", ">15年（高年限）"]
+        )
+        # 专科背景
+        specialty = st.selectbox(
+            "3. 专科背景", 
+            ["皮肤病专科医生", "非皮肤病专科医生"]
+        )
+        # 接诊量
+        daily_patients = st.selectbox(
+            "4. 日均接诊量", 
+            ["≤10例", "10-20例", ">20例"]
+        )
+        # 技术态度
+        prior_ai_trust = st.slider(
+            "5. 实验前对AI辅助诊断的信任度", 
+            1, 5, 3
+        )
         
         if st.form_submit_button("✅ 提交信息并开始测试"):
-            # 保存医生信息
+            # 生成带前缀的ID
+            level_prefix = {
+                "三甲医院（含专科医生）": "A",
+                "二级医院（含专科医生）": "B",
+                "社区医院（含规培/实习生）": "C"
+            }[hospital_level]
+            st.session_state.doctor_id = f"{level_prefix}_DR_{uuid.uuid4().hex[:6].upper()}"
+            
+            # 保存医生信息（覆盖图2的“医生需要填什么”）
             st.session_state.doctor_info = {
                 "doctor_id": st.session_state.doctor_id,
                 "hospital_level": hospital_level,
                 "work_years": work_years,
-                "monthly_cases": monthly_cases,
-                "initial_ai_trust": ai_trust,
+                "specialty": specialty,  # 新增：专科背景
+                "daily_patients": daily_patients,
+                "prior_ai_trust": prior_ai_trust,
                 "start_time": time.strftime("%Y-%m-%d %H:%M:%S")
             }
             
-            # 加载测试集（容错）
+            # 加载测试集（可扩展：根据工作年限调整题目难度）
             try:
                 gold_df = load_gold_data()
+                # 可选：给高年限医生增加“陷阱题”（AI错误的题目）
+                if ">15年" in work_years:
+                    more_trap = gold_df[~gold_df["ai_correct"]].sample(min(2, len(gold_df[~gold_df["ai_correct"]])))
+                    gold_df = pd.concat([gold_df, more_trap]).drop_duplicates()
                 st.session_state.test_set = load_balanced_test_set(gold_df)
                 st.session_state.step = "test"
                 st.rerun()
             except Exception as e:
                 st.error(f"测试数据加载失败：{str(e)}")
 
-# === 5. 步骤2：答题流程（核心，适配云端图片） ===
+# === 答题流程（适配图2的交互动作） ===
 def test_step():
-    # 检查测试集是否加载
     if st.session_state.test_set is None:
         st.error("⚠️ 测试数据未加载，请返回重新开始")
         if st.button("🔄 返回重新开始"):
@@ -190,27 +191,21 @@ def test_step():
     
     idx = st.session_state.current_idx
     test_set = st.session_state.test_set
-    
-    # 检查是否完成所有题目
     if idx >= len(test_set):
         st.session_state.step = "result"
         st.rerun()
     
-    # 当前题目数据
     current_data = test_set.iloc[idx]
-    image_url = current_data["image_url"]  # 从CSV读取图片GitHub链接
+    image_url = current_data["image_url"]
     true_label = current_data["true_cn"]
     ai_label = current_data["ai_cn"]
+    ai_is_correct = (ai_label == true_label)
     
-    # 页面标题
     st.title(f"📝 测试题 {idx + 1}/{TEST_COUNT}")
     st.progress((idx + 1) / TEST_COUNT, text=f"进度：{idx + 1}/{TEST_COUNT}")
-    
-    # 显示图片（适配GitHub云端链接）
     st.subheader("皮肤镜图像")
     try:
         if image_url and image_url.startswith("https://raw.githubusercontent.com/"):
-            # 直接显示GitHub上的图片
             st.image(image_url, use_container_width=True, caption=f"图片ID：{current_data['image_id']}")
         else:
             st.image("https://via.placeholder.com/600x400?text=图像链接缺失", use_container_width=True)
@@ -218,124 +213,131 @@ def test_step():
         st.image("https://via.placeholder.com/600x400?text=图像加载失败", use_container_width=True)
         st.warning(f"图片加载失败：{str(e)}")
     
-    # 分栏答题
     col1, col2 = st.columns([1, 1])
-    
-    # 第一阶段：独立诊断
     with col1:
         st.markdown("### 第一阶段：独立诊断")
-        # Top-1/2/3选择
+        # 独立诊断1/2/3项（下拉菜单）
         top1 = st.selectbox("首选 (Top-1)", ["请选择"] + ALL_CLASSES, key=f"t1_{idx}")
         top2 = st.selectbox("次选 (Top-2)", ["请选择"] + ALL_CLASSES, key=f"t2_{idx}")
         top3 = st.selectbox("备选 (Top-3)", ["请选择"] + ALL_CLASSES, key=f"t3_{idx}")
-        conf_init = st.slider("初始信心（1-10分）", 1, 10, 5, key=f"c1_{idx}")
-        
-        # 验证选择有效性
+        # 初始信心评分（滑块）
+        conf_init = st.slider("初始信心自评（1-10分）", 1, 10, 5, key=f"c1_{idx}")
         choices = [top1, top2, top3]
         is_valid = "请选择" not in choices and len(set(choices)) == 3
         
-        # 提交独立诊断
         if not st.session_state.show_ai:
             if st.button("🔍 获取AI辅助建议", disabled=not is_valid):
                 st.session_state.initial_top = choices
                 st.session_state.initial_conf = conf_init
-                st.session_state.ai_suggestion = {
-                    "label": ai_label  # 移除置信度
-                }
+                st.session_state.ai_suggestion = {"label": ai_label, "is_correct": ai_is_correct}
                 st.session_state.question_start = time.time()
+                st.session_state.time_baseline = round(time.time() - st.session_state.question_start, 2)
                 st.session_state.show_ai = True
                 st.rerun()
             if not is_valid:
                 st.caption("⚠️ 请完成Top-1/2/3选择（不可重复）")
     
-    # 第二阶段：AI辅助（移除置信度展示）
     with col2:
         if st.session_state.show_ai:
             st.markdown("### 第二阶段：AI辅助决策")
-            # 显示AI建议（仅展示标签，移除置信度）
-            st.info(f"🤖 AI诊断建议：**{st.session_state.ai_suggestion['label']}**")
-            
-            # 决策逻辑
-            initial_top1 = st.session_state.initial_top[0]
             ai_sug = st.session_state.ai_suggestion["label"]
+            st.info(f"🤖 AI诊断建议：**{ai_sug}**")
             
-            if initial_top1 == ai_sug:
-                st.success("✅ 您的首选与AI建议一致！")
-                final_top1 = initial_top1
-                final_decision = "坚持原诊断（与AI一致）"
+            initial_top1 = st.session_state.initial_top[0]
+            interaction_type = "一致" if initial_top1 == ai_sug else "冲突"
+            
+            st.markdown("#### 交互动作选择")
+            # 交互动作（坚持/替换/增加）
+            action = st.radio(
+                "您希望如何处理AI建议？",
+                ["坚持原诊断", "替换为AI建议", "增加AI建议至Top4"],
+                key=f"act_{idx}"
+            )
+            
+            # 根据交互动作生成最终诊断
+            final_top1 = initial_top1
+            final_top2 = st.session_state.initial_top[1]
+            final_top3 = st.session_state.initial_top[2]
+            final_top4 = "无"
+            if action == "替换为AI建议":
+                final_top1 = ai_sug
+            elif action == "增加AI建议至Top4":
+                final_top4 = ai_sug
+            
+            # 最终信心评分（滑块）
+            conf_final = st.slider("最终信心自评（1-10分）", 1, 10, st.session_state.initial_conf, key=f"c2_{idx}")
+            
+            if st.button("✅ 确认结果并进入下一题"):
+                time_post_ai = round(time.time() - st.session_state.question_start, 2)
+                confidence_gain = conf_final - st.session_state.initial_conf
+                is_initial_top1_correct = (initial_top1 == true_label)
+                is_initial_top3_correct = (true_label in st.session_state.initial_top)
                 
-                # 确认按钮
-                if st.button("✅ 确认结果并进入下一题"):
-                    # 保存结果（移除置信度字段）
-                    result = {
-                        **st.session_state.doctor_info,
-                        "image_id": current_data["image_id"],
-                        "true_label": true_label,
-                        "ai_label": ai_sug,
-                        "initial_top1": initial_top1,
-                        "initial_top2": st.session_state.initial_top[1],
-                        "initial_top3": st.session_state.initial_top[2],
-                        "final_top1": final_top1,
-                        "final_decision": final_decision,
-                        "initial_conf": st.session_state.initial_conf,
-                        "final_conf": conf_init,  # 信心不变
-                        "time_used": round(time.time() - st.session_state.question_start, 2),
-                        "is_correct": (final_top1 == true_label)
-                    }
-                    st.session_state.user_results.append(result)
-                    save_result(result)
-                    
-                    # 重置状态，进入下一题
-                    reset_test_state()
-                    st.session_state.current_idx += 1
-                    st.rerun()
-            else:
-                st.warning("⚠️ 您的诊断与AI建议不一致")
-                conf_final = st.slider("最终信心（1-10分）", 1, 10, 5, key=f"c2_{idx}")
+                final_options = [final_top1, final_top2, final_top3]
+                if final_top4 != "无":
+                    final_options.append(final_top4)
+                is_final_top1_correct = (final_top1 == true_label)
+                is_final_top3_correct = (true_label in final_options[:3])
+                is_final_top4_correct = (true_label in final_options)
+                use_ai = 1 if action != "坚持原诊断" else 0
                 
-                # 决策按钮
-                col_btn1, col_btn2 = st.columns(2)
-                with col_btn1:
-                    if st.button("🔄 采纳AI建议作为首选"):
-                        st.session_state.final_top1 = ai_sug
-                        st.session_state.final_decision = "采纳AI建议"
-                with col_btn2:
-                    if st.button("🛡️ 坚持我的原诊断"):
-                        st.session_state.final_top1 = initial_top1
-                        st.session_state.final_decision = "坚持原诊断"
+                # 决策路径与误导/纠正标记
+                initial_correct = (initial_top1 == true_label)
+                final_correct = (final_top1 == true_label)
+                decision_path = ""
+                is_misled = False
+                is_rescued = False
+                if initial_correct and not final_correct:
+                    decision_path = "误导"
+                    is_misled = True
+                elif not initial_correct and final_correct:
+                    decision_path = "纠正"
+                    is_rescued = True
+                elif initial_correct and final_correct:
+                    decision_path = "固执"
+                else:
+                    decision_path = "盲从"
                 
-                # 确认最终决策
-                if st.session_state.final_top1:
-                    if st.button("✅ 确认结果并进入下一题"):
-                        # 保存结果（移除置信度字段）
-                        result = {
-                            **st.session_state.doctor_info,
-                            "image_id": current_data["image_id"],
-                            "true_label": true_label,
-                            "ai_label": ai_sug,
-                            "initial_top1": initial_top1,
-                            "initial_top2": st.session_state.initial_top[1],
-                            "initial_top3": st.session_state.initial_top[2],
-                            "final_top1": st.session_state.final_top1,
-                            "final_decision": st.session_state.final_decision,
-                            "initial_conf": st.session_state.initial_conf,
-                            "final_conf": conf_final,
-                            "time_used": round(time.time() - st.session_state.question_start, 2),
-                            "is_correct": (st.session_state.final_top1 == true_label)
-                        }
-                        st.session_state.user_results.append(result)
-                        save_result(result)
-                        
-                        # 重置状态，进入下一题
-                        reset_test_state()
-                        st.session_state.current_idx += 1
-                        st.rerun()
+                # 组装结果（覆盖图3需记录的数据）
+                result = {
+                    **st.session_state.doctor_info,
+                    "image_id": current_data["image_id"],
+                    "true_label": true_label,
+                    "ai_label": ai_sug,
+                    "ai_is_correct": ai_is_correct,
+                    "initial_top1": initial_top1,
+                    "initial_top2": st.session_state.initial_top[1],
+                    "initial_top3": st.session_state.initial_top[2],
+                    "is_initial_top1_correct": is_initial_top1_correct,
+                    "is_initial_top3_correct": is_initial_top3_correct,
+                    "initial_confidence": st.session_state.initial_conf,
+                    "time_baseline": st.session_state.time_baseline,
+                    "time_post_ai": time_post_ai,
+                    "interaction_type": interaction_type,
+                    "action_taken": action,
+                    "use_ai": use_ai,
+                    "final_top1": final_top1,
+                    "final_top2": final_top2,
+                    "final_top3": final_top3,
+                    "final_top4": final_top4,
+                    "is_final_top1_correct": is_final_top1_correct,
+                    "is_final_top3_correct": is_final_top3_correct,
+                    "is_final_top4_correct": is_final_top4_correct,
+                    "final_confidence": conf_final,
+                    "confidence_gain": confidence_gain,
+                    "decision_path": decision_path,
+                    "is_misled": is_misled,
+                    "is_rescued": is_rescued
+                }
+                st.session_state.user_results.append(result)
+                save_result(result)
+                reset_test_state()
+                st.session_state.current_idx += 1
+                st.rerun()
 
-# === 6. 步骤3：结果展示（彩色报告表格+多图表） ===
+# === 结果展示（覆盖所有需画图的需求） ===
 def result_step():
-    st.title("🏁 测试完成！结果对账报告")
-    
-    # 基础统计
+    st.title("🏁 测试完成！研究数据可视化报告")
     results = st.session_state.user_results
     if not results:
         st.warning("暂无答题结果")
@@ -344,150 +346,88 @@ def result_step():
             st.rerun()
         return
     
-    correct_initial = sum([r["initial_top1"] == r["true_label"] for r in results])
-    correct_final = sum([r["is_correct"] for r in results])
-    initial_top1_acc = correct_initial / len(results)
-    final_top1_acc = correct_final / len(results)
+    df = pd.DataFrame(results)
     
-    # 1. 核心指标卡片（彩色）
-    st.subheader("📊 核心诊断指标")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("初始Top-1准确率", f"{initial_top1_acc:.1%}", f"{correct_initial}/{len(results)}", 
-                 delta_color="normal")
-    with col2:
-        st.metric("最终Top-1准确率", f"{final_top1_acc:.1%}", f"{correct_final}/{len(results)}",
-                 delta=f"{(final_top1_acc - initial_top1_acc):.1%}", delta_color="normal")
-    with col3:
-        # 计算AI采纳率
-        adopt_ai = sum([r["final_decision"] == "采纳AI建议" for r in results])
-        st.metric("AI建议采纳率", f"{adopt_ai/len(results):.1%}", f"{adopt_ai}/{len(results)}")
-    with col4:
-        # 平均答题时间
-        avg_time = np.mean([r["time_used"] for r in results])
-        st.metric("平均答题时间", f"{avg_time:.1f}秒", delta_color="normal")
+    # 1. 三甲vs社区的准确率（机构层级假设）
+    st.subheader("1. 机构层级：三甲vs社区的诊断准确率")
+    hospital_group = df.groupby("hospital_level").agg(
+        initial_top1=("is_initial_top1_correct", "mean"),
+        final_top1=("is_final_top1_correct", "mean"),
+        initial_top3=("is_initial_top3_correct", "mean"),
+        final_top3=("is_final_top3_correct", "mean")
+    ).reset_index()
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+    x = np.arange(len(hospital_group["hospital_level"]))
+    width = 0.35
+    ax1.bar(x-width/2, hospital_group["initial_top1"], width, label="初始诊断", color="#4285F4")
+    ax1.bar(x+width/2, hospital_group["final_top1"], width, label="AI辅助后", color="#34A853")
+    ax1.set_title("Top-1准确率（三甲vs社区）")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(hospital_group["hospital_level"], rotation=15)
+    ax1.legend()
+    ax2.bar(x-width/2, hospital_group["initial_top3"], width, label="初始诊断", color="#FBBC05")
+    ax2.bar(x+width/2, hospital_group["final_top3"], width, label="AI辅助后", color="#EA4335")
+    ax2.set_title("Top-3准确率（三甲vs社区）")
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(hospital_group["hospital_level"], rotation=15)
+    ax2.legend()
+    st.pyplot(fig)
+
+    # 2. 低/高年限医生的准确率+AI使用频率（经验水平假设）
+    st.subheader("2. 经验水平：低/高年限医生的表现")
+    df["year_group"] = df["work_years"].map(lambda x: "低年限" if "≤5年" in x else "高年限" if ">15年" in x else "中年限")
+    year_group = df[df["year_group"].isin(["低年限", "高年限"])].groupby("year_group").agg(
+        initial_top1=("is_initial_top1_correct", "mean"),
+        final_top1=("is_final_top1_correct", "mean"),
+        use_ai=("use_ai", "mean")
+    ).reset_index()
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+    ax1.bar(year_group["year_group"], year_group["initial_top1"], label="初始诊断", color="#4285F4")
+    ax1.bar(year_group["year_group"], year_group["final_top1"], bottom=year_group["initial_top1"], label="AI辅助后提升", color="#34A853")
+    ax1.set_title("Top-1准确率（低/高年限）")
+    ax1.legend()
+    ax2.bar(year_group["year_group"], year_group["use_ai"], color="#FBBC05")
+    ax2.set_title("AI使用频率（低/高年限）")
+    st.pyplot(fig)
+
+    # 3. 接诊量与AI依赖度（接诊量假设）
+    st.subheader("3. 接诊量：医生的AI依赖度")
+    load_group = df.groupby("daily_patients")["use_ai"].mean().reset_index()
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.bar(load_group["daily_patients"], load_group["use_ai"], color="#4285F4")
+    ax.set_title("不同接诊量医生的AI依赖度")
+    st.pyplot(fig)
+
+    # 4. 初始信任度与AI采纳率（技术态度假设）
+    st.subheader("4. 技术态度：初始信任度与AI采纳率")
+    trust_group = df.groupby("prior_ai_trust")["use_ai"].mean().reset_index()
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(trust_group["prior_ai_trust"], trust_group["use_ai"], marker="o", color="#34A853")
+    ax.set_title("初始信任度与AI采纳率的关系")
+    st.pyplot(fig)
+
+    # 数据导出
+    st.subheader("💾 完整研究数据导出")
+    if st.button("导出全部数据CSV"):
+        try:
+            csv = df.to_csv(index=False, encoding="utf-8-sig")
+            st.download_button(
+                label="📥 下载CSV文件",
+                data=csv,
+                file_name=f"皮肤病AI辅助诊断研究数据_{st.session_state.doctor_id}_{time.strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        except Exception as e:
+            st.warning(f"导出失败：{str(e)}")
     
-    # 2. 准确率对比图（彩色柱状图）
-    st.subheader("🎯 准确率对比分析")
-    col_plot1, col_plot2 = st.columns(2)
-    
-    with col_plot1:
-        st.markdown("#### Top-1准确率对比")
-        fig1, ax1 = plt.subplots(figsize=(6, 4))
-        categories = ["初始诊断", "最终诊断"]
-        accuracies = [initial_top1_acc, final_top1_acc]
-        colors = ["#4285F4", "#34A853"]  # 谷歌蓝/绿
-        bars = ax1.bar(categories, accuracies, color=colors, alpha=0.8)
-        ax1.set_ylim(0, 1.0)
-        ax1.set_ylabel("准确率")
-        ax1.set_title("初始 vs 最终诊断准确率", fontsize=12)
-        # 添加数值标签
-        for bar, acc in zip(bars, accuracies):
-            ax1.text(bar.get_x()+bar.get_width()/2, bar.get_height()+0.02, 
-                    f"{acc:.1%}", ha="center", fontsize=11, fontweight="bold")
-        st.pyplot(fig1)
-    
-    with col_plot2:
-        st.markdown("#### Top-3准确率分析")
-        # 计算初始Top-3准确率
-        top3_correct = sum([r["true_label"] in [r["initial_top1"], r["initial_top2"], r["initial_top3"]] for r in results])
-        top3_acc = top3_correct / len(results)
-        
-        # 计算AI辅助后Top-3准确率
-        final_top3_correct = sum([
-            r["true_label"] in [r["final_top1"], r["initial_top2"], r["initial_top3"]] 
-            for r in results
-        ])
-        final_top3_acc = final_top3_correct / len(results)
-        
-        fig2, ax2 = plt.subplots(figsize=(6, 4))
-        categories = ["初始Top-3", "最终Top-3"]
-        accuracies = [top3_acc, final_top3_acc]
-        colors = ["#FBBC05", "#EA4335"]  # 谷歌黄/红
-        bars = ax2.bar(categories, accuracies, color=colors, alpha=0.8)
-        ax2.set_ylim(0, 1.0)
-        ax2.set_ylabel("准确率")
-        ax2.set_title("Top-3诊断准确率对比", fontsize=12)
-        # 添加数值标签
-        for bar, acc in zip(bars, accuracies):
-            ax2.text(bar.get_x()+bar.get_width()/2, bar.get_height()+0.02, 
-                    f"{acc:.1%}", ha="center", fontsize=11, fontweight="bold")
-        st.pyplot(fig2)
-    
-    # 3. 彩色诊断路径明细表（参考图二）
-    st.subheader("🔍 诊断路径明细（彩色版）")
-    # 构造表格数据
-    table_data = []
-    for idx, r in enumerate(results):
-        # 状态标签（彩色emoji）
-        correct_tag = "✅ 正确" if r["is_correct"] else "❌ 错误"
-        decision_tag = {
-            "坚持原诊断（与AI一致）": "🟢 一致",
-            "坚持原诊断": "🔵 坚持",
-            "采纳AI建议": "🟡 采纳AI"
-        }.get(r["final_decision"], r["final_decision"])
-        
-        table_data.append({
-            "序号": idx+1,
-            "图片ID": r["image_id"],
-            "真实标签": r["true_label"],
-            "初始首选": r["initial_top1"],
-            "AI建议": r["ai_label"],
-            "最终首选": r["final_top1"],
-            "决策类型": decision_tag,
-            "是否正确": correct_tag,
-            "答题时间": f"{r['time_used']}秒",
-            "初始信心": f"{r['initial_conf']}分",
-            "最终信心": f"{r['final_conf']}分"
-        })
-    
-    # 渲染彩色表格（自定义列样式）
-    st.dataframe(
-        table_data,
-        column_config={
-            "序号": st.column_config.NumberColumn(width="small"),
-            "图片ID": st.column_config.TextColumn(width="medium"),
-            "真实标签": st.column_config.TextColumn(width="medium"),
-            "初始首选": st.column_config.TextColumn(width="medium"),
-            "AI建议": st.column_config.TextColumn(width="medium"),
-            "最终首选": st.column_config.TextColumn(width="medium"),
-            "决策类型": st.column_config.TextColumn(width="small"),
-            "是否正确": st.column_config.TextColumn(width="small"),
-            "答题时间": st.column_config.TextColumn(width="small"),
-            "初始信心": st.column_config.TextColumn(width="small"),
-            "最终信心": st.column_config.TextColumn(width="small")
-        },
-        use_container_width=True,
-        hide_index=True
-    )
-    
-    # 4. 导出结果（适配云端部署）
-    st.subheader("💾 结果导出")
-    col_export1, col_export2 = st.columns(2)
-    with col_export1:
-        if st.button("导出详细结果CSV"):
-            try:
-                csv = pd.DataFrame(results).to_csv(index=False, encoding="utf-8-sig")
-                st.download_button(
-                    label="📥 下载CSV文件",
-                    data=csv,
-                    file_name=f"诊断结果_{st.session_state.doctor_id}_{time.strftime('%Y%m%d')}.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-            except Exception as e:
-                st.warning(f"导出失败：{str(e)}")
-    with col_export2:
-        if st.button("🔄 重新开始测试"):
-            init_session_state()
-            st.rerun()
+    if st.button("🔄 重新开始测试"):
+        init_session_state()
+        st.rerun()
 
 # === 主函数 ===
 def main():
-    # 初始化会话状态
     init_session_state()
-    
-    # 流程控制
     if st.session_state.step == "profile":
         profile_step()
     elif st.session_state.step == "test":
