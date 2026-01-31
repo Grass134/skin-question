@@ -17,7 +17,9 @@ st.set_page_config(page_title="皮肤病AI辅助诊断研究", page_icon="🩺",
 GITHUB_USERNAME = "Grass134"
 GITHUB_REPO = "skin-question"
 GOLD_TXT = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/main/boosted_final_detail4.UTF-8.txt"
-RESULT_CSV = f"/tmp/diagnosis_results_{uuid.uuid4().hex[:6]}.csv"
+
+# ========== 后台导出CSV配置（关键） ==========
+BACKEND_CSV_PATH = "skin_diagnosis_backend_data.csv"
 
 # GitHub图片文件夹配置
 GITHUB_IMAGE_FOLDER = "experiment_pool"
@@ -42,7 +44,7 @@ def init_session_state():
         "test_set": None,
         "doctor_info": {},
         "ai_suggestion": {},
-        "initial_top": ["请选择", "无", "无"],  # 默认Top2/3为“无”
+        "initial_top": ["请选择", "无", "无"],
         "initial_conf": 5,
         "final_top1": "",
         "final_top2": "",
@@ -57,6 +59,21 @@ def init_session_state():
     for key, value in default_states.items():
         if key not in st.session_state:
             st.session_state[key] = value
+    
+    # 初始化后台CSV文件
+    if not os.path.exists(BACKEND_CSV_PATH):
+        header = [
+            "doctor_id", "hospital_level", "work_years", "daily_patients", "prior_ai_trust",
+            "image_id", "true_label", "ai_label", "ai_is_correct",
+            "initial_top1", "initial_top2", "initial_top3", "initial_confidence",
+            "is_initial_top1_correct", "is_initial_top3_correct",
+            "interaction_type", "action_taken", "use_ai",
+            "final_top1", "final_top2", "final_top3", "final_top4",
+            "is_final_top1_correct", "is_final_top3_correct", "is_final_top4_correct",
+            "final_confidence", "confidence_gain", "decision_path", "is_misled", "is_rescued",
+            "time_baseline", "time_post_ai", "submit_time"
+        ]
+        pd.DataFrame(columns=header).to_csv(BACKEND_CSV_PATH, index=False, encoding="utf-8-sig")
 
 # === 数据加载 ===
 @st.cache_data
@@ -85,7 +102,6 @@ def load_gold_data():
         st.stop()
     return df
 
-@st.cache_data
 def load_balanced_test_set(df):
     ai_correct = df[df["ai_correct"]]
     ai_incorrect = df[~df["ai_correct"]]
@@ -99,15 +115,17 @@ def load_balanced_test_set(df):
     return test_set.head(TEST_COUNT)
 
 # === 辅助函数 ===
-def save_result(result):
+def save_result_to_backend(result):
     try:
-        df = pd.DataFrame([result])
-        if not os.path.exists(RESULT_CSV):
-            df.to_csv(RESULT_CSV, mode="w", header=True, index=False, encoding="utf-8-sig")
-        else:
-            df.to_csv(RESULT_CSV, mode="a", header=False, index=False, encoding="utf-8-sig")
+        pd.DataFrame([result]).to_csv(
+            BACKEND_CSV_PATH,
+            mode="a",
+            header=False,
+            index=False,
+            encoding="utf-8-sig"
+        )
     except Exception as e:
-        st.warning(f"结果保存失败：{str(e)}")
+        st.warning(f"后台数据保存失败：{str(e)}")
 
 def reset_test_state():
     st.session_state.show_ai = False
@@ -120,18 +138,28 @@ def reset_test_state():
     st.session_state.final_decision = ""
     st.session_state.final_conf = 5
     st.session_state.time_baseline = 0
+    st.session_state.current_idx = 0
+    st.session_state.user_results = []
+    st.session_state.test_set = None
 
-# === 获取GitHub图片链接 ===
+# === 优化图片加载逻辑（匹配短文件名） ===
 def get_github_image_url(image_id):
+    # 直接使用原始image_id作为核心文件名，不再处理后缀
+    core_image_id = image_id
+    # 适配你的两个目标文件夹
     possible_paths = [
-        f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id}.jpg",
-        f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/{image_id}.jpg",
-        f"{GITHUB_IMAGE_FOLDER}/vitiligo/{image_id}.jpg",
-        f"{GITHUB_IMAGE_FOLDER}/{image_id}.jpg",
-        f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id}.png",
-        f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/{image_id}.png",
-        f"{GITHUB_IMAGE_FOLDER}/vitiligo/{image_id}.png",
-        f"{GITHUB_IMAGE_FOLDER}/{image_id}.png"
+        # 白癜风
+        f"{GITHUB_IMAGE_FOLDER}/vitiligo/{core_image_id}.jpg",
+        f"{GITHUB_IMAGE_FOLDER}/vitiligo/{core_image_id}.png",
+        # 白色糠疹
+        f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/{core_image_id}.jpg",
+        f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/{core_image_id}.png",
+        # 银屑病
+        f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{core_image_id}.jpg",
+        f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{core_image_id}.png",
+        # 根目录
+        f"{GITHUB_IMAGE_FOLDER}/{core_image_id}.jpg",
+        f"{GITHUB_IMAGE_FOLDER}/{core_image_id}.png"
     ]
     
     for path in possible_paths:
@@ -144,13 +172,12 @@ def get_github_image_url(image_id):
             continue
     return "https://via.placeholder.com/600x400?text=图片未找到"
 
-# === 医生信息采集（优化医院等级+调整接诊量） ===
+# === 医生信息采集 ===
 def profile_step():
     st.title("🩺 皮肤病AI辅助诊断研究")
     st.subheader("第一步：医生信息采集（匿名）")
     
     with st.form("profile_form", clear_on_submit=True):
-        # 医院等级（注明实习生/规培生属于社区医院）
         hospital_level = st.selectbox(
             "1. 医院等级（注：实习生/规培生属于社区医院）", 
             ["三甲医院专科医生", "二级医院专科医生", "社区医院医生（含实习生/规培生）"]
@@ -159,15 +186,16 @@ def profile_step():
             "2. 工作年限", 
             ["≤5年（低年限）", "5-15年", ">15年（高年限）", "无工作经验（实习生）"]
         )
-        # 接诊量调整为以30、50为界
         daily_patients = st.selectbox(
             "3. 日均接诊量", 
             ["≤30例", "30-50例", ">50例", "无接诊经验（实习生）"]
         )
         prior_ai_trust = st.slider(
             "4. 实验前对AI辅助诊断的信任度", 
-            1, 5, 3
+            1, 5, 3,
+            help="请滑动滑块选择信任度：1=极不信任，3=中立，5=极度信任"
         )
+        st.caption("💡 提示：请滑动上方滑块选择您对AI辅助诊断的初始信任度（1-5分）")
         
         if st.form_submit_button("✅ 提交信息并开始测试"):
             level_prefix = {
@@ -197,7 +225,7 @@ def profile_step():
             except Exception as e:
                 st.error(f"测试数据加载失败：{str(e)}")
 
-# === 答题流程（支持仅选Top1） ===
+# === 答题流程 ===
 def test_step():
     if st.session_state.test_set is None:
         st.error("⚠️ 测试数据未加载，请返回重新开始")
@@ -232,19 +260,14 @@ def test_step():
     col1, col2 = st.columns([1, 1])
     with col1:
         st.markdown("### 第一阶段：独立诊断")
-        # 提示：可仅选Top1
         st.caption("💡 提示：至少选择Top1，Top2/3可选“无”")
-        # Top1选择（必选）
         top1 = st.selectbox("首选 (Top-1) [必填]", ["请选择"] + ALL_CLASSES, key=f"t1_{idx}")
-        # Top2选择（可选“无”）
         top2_options = ["无"] + [c for c in ALL_CLASSES if c != top1]
         top2 = st.selectbox("次选 (Top-2) [可选]", top2_options, key=f"t2_{idx}", index=0)
-        # Top3选择（可选“无”）
         top3_options = ["无"] + [c for c in ALL_CLASSES if c not in [top1, top2]]
         top3 = st.selectbox("备选 (Top-3) [可选]", top3_options, key=f"t3_{idx}", index=0)
         conf_init = st.slider("初始信心自评（1-10分）", 1, 10, 5, key=f"c1_{idx}")
         
-        # 验证：Top1必须选择
         is_valid = top1 != "请选择"
         if not st.session_state.show_ai:
             if st.button("🔍 获取AI辅助建议", disabled=not is_valid):
@@ -316,19 +339,21 @@ def test_step():
                     decision_path = "盲从"
                 
                 result = {
-                    **st.session_state.doctor_info,
+                    "doctor_id": st.session_state.doctor_id,
+                    "hospital_level": st.session_state.doctor_info["hospital_level"],
+                    "work_years": st.session_state.doctor_info["work_years"],
+                    "daily_patients": st.session_state.doctor_info["daily_patients"],
+                    "prior_ai_trust": st.session_state.doctor_info["prior_ai_trust"],
                     "image_id": image_id,
                     "true_label": true_label,
                     "ai_label": ai_sug,
                     "ai_is_correct": ai_is_correct,
                     "initial_top1": initial_top1,
-                    "initial_top2": final_top2,
-                    "initial_top3": final_top3,
+                    "initial_top2": st.session_state.initial_top[1],
+                    "initial_top3": st.session_state.initial_top[2],
+                    "initial_confidence": st.session_state.initial_conf,
                     "is_initial_top1_correct": is_initial_top1_correct,
                     "is_initial_top3_correct": is_initial_top3_correct,
-                    "initial_confidence": st.session_state.initial_conf,
-                    "time_baseline": st.session_state.time_baseline,
-                    "time_post_ai": time_post_ai,
                     "interaction_type": interaction_type,
                     "action_taken": action,
                     "use_ai": use_ai,
@@ -343,17 +368,26 @@ def test_step():
                     "confidence_gain": confidence_gain,
                     "decision_path": decision_path,
                     "is_misled": is_misled,
-                    "is_rescued": is_rescued
+                    "is_rescued": is_rescued,
+                    "time_baseline": st.session_state.time_baseline,
+                    "time_post_ai": time_post_ai,
+                    "submit_time": time.strftime("%Y-%m-%d %H:%M:%S")
                 }
+                
                 st.session_state.user_results.append(result)
-                save_result(result)
+                save_result_to_backend(result)
+                
                 reset_test_state()
                 st.session_state.current_idx += 1
                 st.rerun()
 
-# === 结果展示（修复图表标题） ===
+# === 结果展示（移除多余提示） ===
 def result_step():
     st.title("🏁 测试完成！研究数据可视化报告")
+    # 仅显示用户ID，移除多余提示
+    st.success(f"✅ 您的测试已完成！您的唯一标识ID：{st.session_state.doctor_id}")
+    st.info("📌 所有数据均匿名存储")
+    
     results = st.session_state.user_results
     if not results:
         st.warning("暂无答题结果")
@@ -375,7 +409,6 @@ def result_step():
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
     x = np.arange(len(hospital_group["hospital_level"]))
     width = 0.35
-    # Top1准确率
     ax1.bar(x-width/2, hospital_group["initial_top1"], width, label="初始诊断", color="#4285F4")
     ax1.bar(x+width/2, hospital_group["final_top1"], width, label="AI辅助后", color="#34A853")
     ax1.set_title("Top-1准确率（按机构）")
@@ -384,7 +417,6 @@ def result_step():
     ax1.set_xticks(x)
     ax1.set_xticklabels(hospital_group["hospital_level"], rotation=15)
     ax1.legend()
-    # Top3准确率
     ax2.bar(x-width/2, hospital_group["initial_top3"], width, label="初始诊断", color="#FBBC05")
     ax2.bar(x+width/2, hospital_group["final_top3"], width, label="AI辅助后", color="#EA4335")
     ax2.set_title("Top-3准确率（按机构）")
@@ -404,7 +436,6 @@ def result_step():
         use_ai=("use_ai", "mean")
     ).reset_index()
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-    # Top1准确率
     ax1.bar(year_group["year_group"], year_group["initial_top1"], label="初始诊断", color="#4285F4")
     ax1.bar(year_group["year_group"], year_group["final_top1"], bottom=year_group["initial_top1"], label="AI辅助后提升", color="#34A853")
     ax1.set_title("Top-1准确率（按经验）")
@@ -412,7 +443,6 @@ def result_step():
     ax1.set_ylabel("准确率")
     ax1.set_xticklabels(year_group["year_group"], rotation=15)
     ax1.legend()
-    # AI使用频率
     ax2.bar(year_group["year_group"], year_group["use_ai"], color="#FBBC05")
     ax2.set_title("AI使用频率（按经验）")
     ax2.set_xlabel("经验水平")
@@ -440,20 +470,6 @@ def result_step():
     ax.set_xlabel("初始信任度（1-5分）")
     ax.set_ylabel("AI采纳率")
     st.pyplot(fig)
-
-    st.subheader("💾 完整研究数据导出")
-    if st.button("导出全部数据CSV"):
-        try:
-            csv = df.to_csv(index=False, encoding="utf-8-sig")
-            st.download_button(
-                label="📥 下载CSV文件",
-                data=csv,
-                file_name=f"皮肤病AI辅助诊断研究数据_{st.session_state.doctor_id}_{time.strftime('%Y%m%d')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-        except Exception as e:
-            st.warning(f"导出失败：{str(e)}")
     
     if st.button("🔄 重新开始测试"):
         init_session_state()
