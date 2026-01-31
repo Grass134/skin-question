@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 import requests
-import io  # 新增：解决Pandas版本问题的关键导入
+import io
 
 # === 核心配置 ===
 st.set_option('client.showErrorDetails', False)
@@ -54,21 +54,22 @@ def init_session_state():
         if key not in st.session_state:
             st.session_state[key] = value
 
-# === 数据加载（修复Pandas版本问题） ===
+# === 数据加载（修复字段检查逻辑） ===
 @st.cache_data
 def load_gold_data():
     try:
         response = requests.get(GOLD_TXT, timeout=15)
-        # 替换为io.StringIO，解决pd.compat的问题
         df = pd.read_csv(io.StringIO(response.text), encoding="utf-8")
     except Exception as e:
         st.error(f"⚠️ 数据加载失败：{str(e)}")
         st.stop()
     
+    # 检查必要字段（包含image_url）
     required_cols = ["image_id", "Top1_预测", "真实病名", "image_url"]
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
-        st.error(f"⚠️ 缺失字段：{', '.join(missing_cols)}")
+        st.error(f"⚠️ CSV文件缺失必要字段：{', '.join(missing_cols)}")
+        st.error("请确保CSV包含以下列：image_id、Top1_预测、真实病名、image_url")
         st.stop()
     
     df["true_cn"] = df["真实病名"].map(DISEASE_LABELS).fillna("未知")
@@ -117,7 +118,7 @@ def reset_test_state():
     st.session_state.final_conf = 5
     st.session_state.time_baseline = 0
 
-# === 医生信息采集 ===
+# === 医生信息采集（彻底删除“专科背景”） ===
 def profile_step():
     st.title("🩺 皮肤病AI辅助诊断研究")
     st.subheader("第一步：医生信息采集（匿名）")
@@ -131,20 +132,17 @@ def profile_step():
             "2. 工作年限", 
             ["≤5年（低年限）", "5-15年", ">15年（高年限）"]
         )
-        specialty = st.selectbox(
-            "3. 专科背景", 
-            ["皮肤病专科医生", "非皮肤病专科医生"]
-        )
         daily_patients = st.selectbox(
-            "4. 日均接诊量", 
+            "3. 日均接诊量", 
             ["≤10例", "10-20例", ">20例"]
         )
         prior_ai_trust = st.slider(
-            "5. 实验前对AI辅助诊断的信任度", 
+            "4. 实验前对AI辅助诊断的信任度", 
             1, 5, 3
         )
         
         if st.form_submit_button("✅ 提交信息并开始测试"):
+            # 生成带前缀的ID
             level_prefix = {
                 "三甲医院（含专科医生）": "A",
                 "二级医院（含专科医生）": "B",
@@ -152,18 +150,20 @@ def profile_step():
             }[hospital_level]
             st.session_state.doctor_id = f"{level_prefix}_DR_{uuid.uuid4().hex[:6].upper()}"
             
+            # 医生信息中无“专科背景”字段
             st.session_state.doctor_info = {
                 "doctor_id": st.session_state.doctor_id,
                 "hospital_level": hospital_level,
                 "work_years": work_years,
-                "specialty": specialty,
                 "daily_patients": daily_patients,
                 "prior_ai_trust": prior_ai_trust,
                 "start_time": time.strftime("%Y-%m-%d %H:%M:%S")
             }
             
+            # 加载测试集
             try:
                 gold_df = load_gold_data()
+                # 给高年限医生增加陷阱题
                 if ">15年" in work_years:
                     more_trap = gold_df[~gold_df["ai_correct"]].sample(min(2, len(gold_df[~gold_df["ai_correct"]])))
                     gold_df = pd.concat([gold_df, more_trap]).drop_duplicates()
