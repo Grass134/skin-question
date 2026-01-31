@@ -19,6 +19,10 @@ GITHUB_REPO = "skin-question"
 GOLD_TXT = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/main/boosted_final_detail4.UTF-8.txt"
 RESULT_CSV = f"/tmp/diagnosis_results_{uuid.uuid4().hex[:6]}.csv"
 
+# 🌟 配置GitHub图片所在的文件夹路径（你的experiment_pool）
+GITHUB_IMAGE_FOLDER = "experiment_pool"  # 图片所在的文件夹名
+GITHUB_BRANCH = "main"  # 仓库分支（默认是main）
+
 # 疾病标签映射
 DISEASE_LABELS = {
     "MEL": "黑色素瘤", "NV": "痣（色素痣）", "BCC": "基底细胞癌", "AK": "光化性角化病",
@@ -54,7 +58,7 @@ def init_session_state():
         if key not in st.session_state:
             st.session_state[key] = value
 
-# === 数据加载（修复字段检查逻辑） ===
+# === 数据加载（删除image_url检查） ===
 @st.cache_data
 def load_gold_data():
     try:
@@ -64,12 +68,12 @@ def load_gold_data():
         st.error(f"⚠️ 数据加载失败：{str(e)}")
         st.stop()
     
-    # 检查必要字段（包含image_url）
-    required_cols = ["image_id", "Top1_预测", "真实病名", "image_url"]
+    # 只检查核心字段（无需image_url）
+    required_cols = ["image_id", "Top1_预测", "真实病名"]
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
         st.error(f"⚠️ CSV文件缺失必要字段：{', '.join(missing_cols)}")
-        st.error("请确保CSV包含以下列：image_id、Top1_预测、真实病名、image_url")
+        st.error("请确保CSV包含以下列：image_id、Top1_预测、真实病名")
         st.stop()
     
     df["true_cn"] = df["真实病名"].map(DISEASE_LABELS).fillna("未知")
@@ -118,7 +122,37 @@ def reset_test_state():
     st.session_state.final_conf = 5
     st.session_state.time_baseline = 0
 
-# === 医生信息采集（彻底删除“专科背景”） ===
+# === 🌟 新增：拼接GitHub图片Raw链接的函数 ===
+def get_github_image_url(image_id):
+    # 图片可能存在的路径（先尝试子文件夹，再尝试平铺路径）
+    possible_paths = [
+        # 子文件夹路径（PSORIASIS/pityrasis-alba-images/vitiligo）
+        f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id}.jpg",
+        f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/{image_id}.jpg",
+        f"{GITHUB_IMAGE_FOLDER}/vitiligo/{image_id}.jpg",
+        # 平铺路径（experiment_pool下直接存放）
+        f"{GITHUB_IMAGE_FOLDER}/{image_id}.jpg",
+        # 兼容png格式
+        f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id}.png",
+        f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/{image_id}.png",
+        f"{GITHUB_IMAGE_FOLDER}/vitiligo/{image_id}.png",
+        f"{GITHUB_IMAGE_FOLDER}/{image_id}.png"
+    ]
+    
+    # 拼接Raw链接并验证是否存在
+    for path in possible_paths:
+        raw_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{path}"
+        try:
+            # 尝试请求图片，状态码200则返回该链接
+            response = requests.head(raw_url, timeout=3)
+            if response.status_code == 200:
+                return raw_url
+        except:
+            continue
+    # 所有路径都不存在时返回占位图
+    return "https://via.placeholder.com/600x400?text=图片未找到"
+
+# === 医生信息采集 ===
 def profile_step():
     st.title("🩺 皮肤病AI辅助诊断研究")
     st.subheader("第一步：医生信息采集（匿名）")
@@ -142,7 +176,6 @@ def profile_step():
         )
         
         if st.form_submit_button("✅ 提交信息并开始测试"):
-            # 生成带前缀的ID
             level_prefix = {
                 "三甲医院（含专科医生）": "A",
                 "二级医院（含专科医生）": "B",
@@ -150,7 +183,6 @@ def profile_step():
             }[hospital_level]
             st.session_state.doctor_id = f"{level_prefix}_DR_{uuid.uuid4().hex[:6].upper()}"
             
-            # 医生信息中无“专科背景”字段
             st.session_state.doctor_info = {
                 "doctor_id": st.session_state.doctor_id,
                 "hospital_level": hospital_level,
@@ -160,10 +192,8 @@ def profile_step():
                 "start_time": time.strftime("%Y-%m-%d %H:%M:%S")
             }
             
-            # 加载测试集
             try:
                 gold_df = load_gold_data()
-                # 给高年限医生增加陷阱题
                 if ">15年" in work_years:
                     more_trap = gold_df[~gold_df["ai_correct"]].sample(min(2, len(gold_df[~gold_df["ai_correct"]])))
                     gold_df = pd.concat([gold_df, more_trap]).drop_duplicates()
@@ -173,7 +203,7 @@ def profile_step():
             except Exception as e:
                 st.error(f"测试数据加载失败：{str(e)}")
 
-# === 答题流程 ===
+# === 答题流程（加载GitHub图片） ===
 def test_step():
     if st.session_state.test_set is None:
         st.error("⚠️ 测试数据未加载，请返回重新开始")
@@ -189,7 +219,7 @@ def test_step():
         st.rerun()
     
     current_data = test_set.iloc[idx]
-    image_url = current_data["image_url"]
+    image_id = current_data["image_id"]  # CSV里的image_id就是图片文件名
     true_label = current_data["true_cn"]
     ai_label = current_data["ai_cn"]
     ai_is_correct = (ai_label == true_label)
@@ -197,14 +227,14 @@ def test_step():
     st.title(f"📝 测试题 {idx + 1}/{TEST_COUNT}")
     st.progress((idx + 1) / TEST_COUNT, text=f"进度：{idx + 1}/{TEST_COUNT}")
     st.subheader("皮肤镜图像")
+    
+    # 🌟 获取GitHub图片链接
+    image_url = get_github_image_url(image_id)
     try:
-        if image_url and image_url.startswith("https://raw.githubusercontent.com/"):
-            st.image(image_url, use_container_width=True, caption=f"图片ID：{current_data['image_id']}")
-        else:
-            st.image("https://via.placeholder.com/600x400?text=图像链接缺失", use_container_width=True)
-    except Exception as e:
-        st.image("https://via.placeholder.com/600x400?text=图像加载失败", use_container_width=True)
-        st.warning(f"图片加载失败：{str(e)}")
+        st.image(image_url, use_container_width=True, caption=f"图片ID：{image_id}")
+    except:
+        st.image("https://via.placeholder.com/600x400?text=图片加载失败", use_container_width=True)
+        st.warning(f"⚠️ 图片ID {image_id} 加载失败，请检查GitHub路径")
     
     col1, col2 = st.columns([1, 1])
     with col1:
@@ -287,7 +317,7 @@ def test_step():
                 
                 result = {
                     **st.session_state.doctor_info,
-                    "image_id": current_data["image_id"],
+                    "image_id": image_id,
                     "true_label": true_label,
                     "ai_label": ai_sug,
                     "ai_is_correct": ai_is_correct,
