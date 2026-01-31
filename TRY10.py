@@ -14,10 +14,10 @@ st.set_option('client.showErrorDetails', False)  # 关闭代码错误提示
 st.set_page_config(page_title="皮肤病AI辅助诊断", page_icon="🩺", layout="wide")
 
 # -------------------------- 需替换的部分 --------------------------
-# 1. 替换成你的GitHub用户名
+# 1. 替换成你的GitHub用户名（比如 Grass134）
 GITHUB_USERNAME = "你的GitHub用户名"
-# 2. 替换成你的GitHub仓库名
-GITHUB_REPO = "skin-questionnaire"
+# 2. 替换成你的GitHub仓库名（已改为 skin-question）
+GITHUB_REPO = "skin-question"
 # -----------------------------------------------------------------
 
 # CSV的GitHub Raw链接（自动拼接，无需手动改）
@@ -56,14 +56,14 @@ def init_session_state():
         if key not in st.session_state:
             st.session_state[key] = value
 
-# === 2. 数据加载（适配GitHub云端读取） ===
+# === 2. 数据加载（适配GitHub云端读取，移除timeout参数） ===
 @st.cache_data
 def load_gold_data():
-    # 容错1：读取GitHub CSV（添加超时和异常处理）
+    # 容错1：读取GitHub CSV（移除timeout参数，解决版本兼容问题）
     try:
-        df = pd.read_csv(GOLD_CSV, encoding="utf-8", timeout=30)
+        df = pd.read_csv(GOLD_CSV, encoding="utf-8")
     except UnicodeDecodeError:
-        df = pd.read_csv(GOLD_CSV, encoding="gbk", timeout=30)
+        df = pd.read_csv(GOLD_CSV, encoding="gbk")
     except Exception as e:
         st.error(f"⚠️ 读取云端CSV失败：{str(e)}")
         st.error("请检查：1.GitHub用户名/仓库名是否正确 2.CSV文件是否上传到仓库根目录")
