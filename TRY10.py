@@ -12,6 +12,7 @@ import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import re  
+import random
 
 # === 核心配置 ===
 st.set_option('client.showErrorDetails', True)  
@@ -22,16 +23,25 @@ GITHUB_USERNAME = "Grass134"
 GITHUB_REPO = "skin-question"
 GOLD_TXT = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/main/boosted_final_detail4.UTF-8.txt"
 
-# ========== 本地CSV配置 ==========
-BACKEND_CSV_PATH = "skin_diagnosis_backend_data.csv"
-
-# ========== Google Sheets配置 ==========
+# ========== Google Sheets配置（唯一存储方式） ==========
 GOOGLE_SHEET_NAME = "皮肤诊断数据"  
 LOCAL_GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
 
 # GitHub图片文件夹配置
 GITHUB_IMAGE_FOLDER = "experiment_pool"
 GITHUB_BRANCH = "main"
+
+# 备用图片池（严格匹配你的重命名规则）
+FALLBACK_IMAGE_POOLS = {
+    "vitiligo": [f"vitiligo-{str(i).zfill(4)}.jpg" for i in range(1, 500)] + 
+                [f"vitiligo-{str(i).zfill(4)}-{j}.jpg" for i in range(1, 500) for j in range(1, 10)],
+    "pityriasis-alba": [f"pityriasis-alba-{str(i).zfill(4)}.jpg" for i in range(1, 300)] + 
+                       [f"pityriasis-alba-{str(i).zfill(4)}-{j}.jpg" for i in range(1, 300) for j in range(1, 10)],
+    "psoriasis": [f"psoriasis-{str(i).zfill(4)}.jpg" for i in range(1, 300)] + 
+                 [f"psoriasis-{str(i).zfill(4)}-{j}.jpg" for i in range(1, 300) for j in range(1, 10)],
+    "general": [f"skin-image-{str(i).zfill(4)}.jpg" for i in range(1, 500)] + 
+               [f"skin-image-{str(i).zfill(4)}-{j}.jpg" for i in range(1, 500) for j in range(1, 10)]
+}
 
 # 疾病标签映射
 DISEASE_LABELS = {
@@ -42,7 +52,7 @@ DISEASE_LABELS = {
 ALL_CLASSES = list(DISEASE_LABELS.values())
 TEST_COUNT = 10
 
-# === 初始化Google Sheets连接 ===
+# === 初始化Google Sheets连接（强制唯一存储） ===
 def init_google_sheets():
     try:
         scope = [
@@ -50,49 +60,69 @@ def init_google_sheets():
             "https://www.googleapis.com/auth/drive"
         ]
         
-        # 尝试从Streamlit Secrets读取（线上部署）
+        # 优先从Streamlit Secrets读取（推荐线上部署）
         try:
-            creds_content = st.secrets["GOOGLE_CREDENTIALS"]
-            if isinstance(creds_content, str):
-                try:
-                    creds_dict = json.loads(creds_content)
-                except json.JSONDecodeError as e:
-                    st.error(f"❌ JSON解析失败：{str(e)}")
-                    st.error("🔍 请检查Secrets中的JSON格式是否正确")
-                    raise
-            else:
-                creds_dict = creds_content
+            creds_dict = dict(st.secrets["GOOGLE_CREDENTIALS"])
+            # 修复private_key换行符（防止复制丢失）
+            if "private_key" in creds_dict:
+                creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
             
+            # 校验必要字段
             required_fields = ["type", "project_id", "private_key", "client_email"]
             missing_fields = [f for f in required_fields if f not in creds_dict]
             if missing_fields:
                 st.error(f"❌ 密钥缺少必要字段：{missing_fields}")
+                st.error("请检查Streamlit Secrets中的GOOGLE_CREDENTIALS配置")
                 raise ValueError(f"Missing required fields: {missing_fields}")
             
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+            st.success("✅ 从Streamlit Secrets加载Google凭证成功")
         
-        # Secrets读取失败时，尝试本地文件（本地运行）
+        # 本地运行时使用本地凭证文件
         except KeyError:
-            st.info("ℹ️ 未检测到Streamlit Secrets中的GOOGLE_CREDENTIALS键，尝试加载本地密钥文件")
+            st.info("ℹ️ 未检测到Streamlit Secrets，尝试加载本地凭证文件")
             if not os.path.exists(LOCAL_GOOGLE_CREDENTIALS_FILE):
-                raise FileNotFoundError(f"本地密钥文件 {LOCAL_GOOGLE_CREDENTIALS_FILE} 不存在")
+                st.error(f"❌ 本地凭证文件 {LOCAL_GOOGLE_CREDENTIALS_FILE} 不存在")
+                raise FileNotFoundError(f"Local credentials file not found")
             creds = ServiceAccountCredentials.from_json_keyfile_name(
                 LOCAL_GOOGLE_CREDENTIALS_FILE, scope
             )
+            st.success("✅ 从本地文件加载Google凭证成功")
         
+        # 连接表格并初始化表头
         client = gspread.authorize(creds)
         try:
             sheet = client.open(GOOGLE_SHEET_NAME).sheet1
+            # 检查表头是否存在，不存在则创建
+            headers = sheet.row_values(1)
+            required_headers = [
+                "doctor_id", "hospital_level", "work_years", "daily_patients", "prior_ai_trust",
+                "image_id", "true_label", "ai_label", "ai_is_correct", "initial_top1", "initial_top2",
+                "initial_top3", "initial_confidence", "is_initial_top1_correct", "is_initial_top3_correct",
+                "interaction_type", "action_taken", "use_ai", "final_top1", "final_top2", "final_top3",
+                "final_top4", "is_final_top1_correct", "is_final_top3_correct", "is_final_top4_correct",
+                "final_confidence", "confidence_gain", "decision_path", "is_misled", "is_rescued",
+                "time_baseline", "time_post_ai", "submit_time"
+            ]
+            if not headers or len(headers) != len(required_headers):
+                sheet.clear()  # 清空错误表头
+                sheet.append_row(required_headers)
+                st.success(f"✅ 初始化Google表格表头成功")
+            st.success(f"✅ 成功连接Google表格：{GOOGLE_SHEET_NAME}")
+            return sheet
+        
         except gspread.exceptions.SpreadsheetNotFound:
             st.error(f"❌ 未找到Google表格：{GOOGLE_SHEET_NAME}")
-            st.error("🔍 请检查表格名称是否完全一致，且该服务账号有访问权限")
+            st.error("请确认表格名称完全一致，且服务账号已获得编辑权限")
             raise
-        
-        return sheet
+        except Exception as e:
+            st.error(f"❌ 连接Google表格失败：{str(e)}")
+            raise
     
     except Exception as e:
-        st.warning(f"⚠️ Google Sheets连接失败：{str(e)}")
-        st.warning("将仅保存到本地CSV文件，请检查凭证配置")
+        st.error(f"⚠️ Google Sheets初始化失败：{str(e)}")
+        st.error("❌ 数据无法存储，请修复凭证配置后重试")
+        st.stop()  # 强制停止，避免无存储情况下继续运行
         return None
 
 # === 会话状态初始化 ===
@@ -101,7 +131,7 @@ def init_session_state():
         "step": "profile",
         "current_idx": 0,
         "show_ai": False,
-        "user_results": [],
+        "user_results": [],  # 临时存储答题结果，最终统一提交
         "test_set": None,
         "doctor_info": {},
         "ai_suggestion": {},
@@ -117,7 +147,7 @@ def init_session_state():
         "time_baseline": 0,
         "doctor_id": "",
         "ai_same_as_initial": False,
-        "gs_sheet": None
+        "gs_sheet": None  # 存储Google Sheets连接对象
     }
     for key, value in default_states.items():
         if key not in st.session_state:
@@ -131,8 +161,8 @@ def load_gold_data():
         response.raise_for_status()
         df = pd.read_csv(io.StringIO(response.text), encoding="utf-8")
     except requests.exceptions.RequestException as e:
-        st.error(f"⚠️ 数据加载失败：{str(e)}")
-        st.error("请检查GitHub链接是否正确，或稍后重试")
+        st.error(f"⚠️ 测试数据加载失败：{str(e)}")
+        st.error("请检查GitHub链接是否正确")
         st.stop()
     except pd.errors.EmptyDataError:
         st.error("⚠️ CSV文件为空，请检查文件内容")
@@ -150,7 +180,7 @@ def load_gold_data():
     df = df[df["true_cn"] != "未知"]
     df = df[df["ai_cn"] != "未知"]
     if len(df) < TEST_COUNT:
-        st.error(f"⚠️ 有效数据不足{TEST_COUNT}条")
+        st.error(f"⚠️ 有效测试数据不足{TEST_COUNT}条")
         st.stop()
     return df
 
@@ -166,42 +196,36 @@ def load_balanced_test_set(df):
     test_set = pd.concat([correct_sample, incorrect_sample]).sample(frac=1).reset_index(drop=True)
     return test_set.head(TEST_COUNT)
 
-# === 数据保存 ===
+# === 数据保存（仅Google Sheets，无本地存储） ===
 def save_result_to_backend(result):
+    # 确保Google Sheets连接已初始化
     if st.session_state.gs_sheet is None:
         st.session_state.gs_sheet = init_google_sheets()
     
     try:
-        pd.DataFrame([result]).to_csv(
-            BACKEND_CSV_PATH,
-            mode="a",
-            header=False,
-            index=False,
-            encoding="utf-8-sig"
-        )
+        # 拼接行数据
+        row_data = [
+            result["doctor_id"], result["hospital_level"], result["work_years"],
+            result["daily_patients"], result["prior_ai_trust"], result["image_id"],
+            result["true_label"], result["ai_label"], result["ai_is_correct"],
+            result["initial_top1"], result["initial_top2"], result["initial_top3"],
+            result["initial_confidence"], result["is_initial_top1_correct"],
+            result["is_initial_top3_correct"], result["interaction_type"],
+            result["action_taken"], result["use_ai"], result["final_top1"],
+            result["final_top2"], result["final_top3"], result["final_top4"],
+            result["is_final_top1_correct"], result["is_final_top3_correct"],
+            result["is_final_top4_correct"], result["final_confidence"],
+            result["confidence_gain"], result["decision_path"], result["is_misled"],
+            result["is_rescued"], result["time_baseline"], result["time_post_ai"],
+            result["submit_time"]
+        ]
+        # 写入Google Sheets
+        st.session_state.gs_sheet.append_row(row_data)
+        st.toast("✅ 数据已成功保存到Google Sheets", icon="✅")
     except Exception as e:
-        st.warning(f"本地CSV保存失败：{str(e)}")
-    
-    if st.session_state.gs_sheet is not None:
-        try:
-            row_data = [
-                result["doctor_id"], result["hospital_level"], result["work_years"],
-                result["daily_patients"], result["prior_ai_trust"], result["image_id"],
-                result["true_label"], result["ai_label"], result["ai_is_correct"],
-                result["initial_top1"], result["initial_top2"], result["initial_top3"],
-                result["initial_confidence"], result["is_initial_top1_correct"],
-                result["is_initial_top3_correct"], result["interaction_type"],
-                result["action_taken"], result["use_ai"], result["final_top1"],
-                result["final_top2"], result["final_top3"], result["final_top4"],
-                result["is_final_top1_correct"], result["is_final_top3_correct"],
-                result["is_final_top4_correct"], result["final_confidence"],
-                result["confidence_gain"], result["decision_path"], result["is_misled"],
-                result["is_rescued"], result["time_baseline"], result["time_post_ai"],
-                result["submit_time"]
-            ]
-            st.session_state.gs_sheet.append_row(row_data)
-        except Exception as e:
-            st.warning(f"Google Sheets同步失败：{str(e)}")
+        st.error(f"❌ 数据保存失败：{str(e)}")
+        st.error("请检查网络连接和Google Sheets权限")
+        raise  # 保存失败时终止流程，确保数据不丢失
 
 # === 重置答题状态 ===
 def reset_test_state():
@@ -216,50 +240,92 @@ def reset_test_state():
     st.session_state.final_conf = 5
     st.session_state.time_baseline = 0
     st.session_state.ai_same_as_initial = False
-    st.session_state.user_results = []
 
-# === 图片加载（最终适配所有命名规则） ===
+# === 获取备用图片URL ===
+def get_fallback_image_url():
+    pool_types = list(FALLBACK_IMAGE_POOLS.keys())
+    random.shuffle(pool_types)
+    
+    for pool_type in pool_types:
+        image_list = FALLBACK_IMAGE_POOLS[pool_type].copy()
+        random.shuffle(image_list)
+        
+        for image_name in image_list[:50]:
+            if pool_type == "pityriasis-alba":
+                path = f"{GITHUB_IMAGE_FOLDER}/pityriasis-alba-images/{image_name}"
+            elif pool_type == "psoriasis":
+                path = f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_name}"
+            elif pool_type == "vitiligo":
+                path = f"{GITHUB_IMAGE_FOLDER}/vitiligo/{image_name}"
+            else:
+                path = f"{GITHUB_IMAGE_FOLDER}/{image_name}"
+            
+            raw_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{path}"
+            try:
+                response = requests.head(raw_url, timeout=2)
+                if response.status_code == 200:
+                    st.toast(f"ℹ️ 图片加载失败，已替换为{pool_type}备用图片", icon="ℹ️")
+                    return raw_url
+            except:
+                continue
+    
+    return "https://via.placeholder.com/600x400?text=图片加载失败"
+
+# === 图片加载（匹配重命名规则） ===
 def get_github_image_url(image_id):
-    """
-    最终适配：
-    1. pityrasis-alba-images：短命名（pityrasis-alba-xxxx.jpg）
-    2. vitiligo：短命名（vitiligo-xxxx.jpg）
-    3. 其他（PSORIASIS/ISIC_）：原始文件名
-    """
     possible_paths = []
-    # 清理image_id后缀
-    image_id_clean = re.sub(r'\.(jpg|png)$', '', image_id)
-
-    # 分类1：pityrasis-alba-images文件夹（短命名）
-    if 'pityrasis-alba' in image_id_clean.lower():
-        # 提取数字（如0015）
-        number_match = re.search(r'(\d+)', image_id_clean)
+    image_id_clean = re.sub(r'\.(jpg|png|jpeg|gif|bmp)$', '', image_id)
+    
+    # 匹配 pityriasis-alba (带i)
+    if 'pityriasis-alba' in image_id_clean.lower():
+        number_match = re.search(r'(\d{4})', image_id_clean)
         if number_match:
-            file_number = number_match.group(1).zfill(4)
-            # 尝试所有短命名格式（含后缀）
-            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}.jpg")
-            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}-1.jpg")
-            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}-2.jpg")
-            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}-3.jpg")
-
-    # 分类2：vitiligo文件夹（短命名）
-    elif 'vitiligo' in image_id_clean.lower():
-        # 提取数字（如0318）
-        number_match = re.search(r'(\d+)', image_id_clean)
+            file_number = number_match.group(1)
+            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityriasis-alba-images/pityriasis-alba-{file_number}.jpg")
+            for suffix in range(1, 11):
+                possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityriasis-alba-images/pityriasis-alba-{file_number}-{suffix}.jpg")
+    # 兼容旧拼写
+    elif 'pityrasis-alba' in image_id_clean.lower():
+        number_match = re.search(r'(\d{4})', image_id_clean)
         if number_match:
-            file_number = number_match.group(1).zfill(4)
-            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/vitiligo/vitiligo-{file_number}.jpg")
-            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/vitiligo/vitiligo-{file_number}-1.jpg")
-
-    # 分类3：PSORIASIS文件夹（原始名）
+            file_number = number_match.group(1)
+            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityriasis-alba-images/pityriasis-alba-{file_number}.jpg")
+            for suffix in range(1, 11):
+                possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityriasis-alba-images/pityriasis-alba-{file_number}-{suffix}.jpg")
+    # 匹配 psoriasis
     elif 'psoriasis' in image_id_clean.lower():
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id_clean}.jpg")
-
-    # 分类4：ISIC_平铺文件（原始名）
+        number_match = re.search(r'(\d{4})', image_id_clean)
+        if number_match:
+            file_number = number_match.group(1)
+            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/psoriasis-{file_number}.jpg")
+            for suffix in range(1, 11):
+                possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/psoriasis-{file_number}-{suffix}.jpg")
+    # 匹配 vitiligo
+    elif 'vitiligo' in image_id_clean.lower():
+        number_match = re.search(r'(\d{4})', image_id_clean)
+        if number_match:
+            file_number = number_match.group(1)
+            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/vitiligo/vitiligo-{file_number}.jpg")
+            for suffix in range(1, 11):
+                possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/vitiligo/vitiligo-{file_number}-{suffix}.jpg")
+    # 匹配通用皮肤图片
+    elif 'skin-image' in image_id_clean.lower():
+        number_match = re.search(r'(\d{4})', image_id_clean)
+        if number_match:
+            file_number = number_match.group(1)
+            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/skin-image-{file_number}.jpg")
+            for suffix in range(1, 11):
+                possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/skin-image-{file_number}-{suffix}.jpg")
+    # ISIC原始文件
     elif image_id_clean.startswith('ISIC_'):
         possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{image_id_clean}.jpg")
+        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{image_id_clean}.png")
+    
+    # 兜底：直接尝试原文件名
+    possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{image_id}.jpg")
+    possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{image_id}.png")
 
-    # 尝试加载图片
+    # 尝试加载
     for path in possible_paths:
         raw_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{path}"
         try:
@@ -269,14 +335,17 @@ def get_github_image_url(image_id):
         except:
             continue
 
-    # 加载失败提示
-    st.warning(f"⚠️ 图片加载失败 - 尝试过的路径：{possible_paths[:10]}...")
-    return "https://via.placeholder.com/600x400?text=图片未找到"
+    # 调用备用图片
+    return get_fallback_image_url()
 
 # === 医生信息采集 ===
 def profile_step():
     st.title("🩺 皮肤病AI辅助诊断研究")
     st.subheader("第一步：医生信息采集（匿名）")
+    
+    # 提前初始化Google Sheets连接（确保后续保存正常）
+    if st.session_state.gs_sheet is None:
+        st.session_state.gs_sheet = init_google_sheets()
     
     with st.form("profile_form", clear_on_submit=True):
         hospital_level = st.selectbox(
@@ -294,9 +363,9 @@ def profile_step():
         prior_ai_trust = st.slider(
             "4. 实验前对AI辅助诊断的信任度", 
             1, 5, 3,
-            help="请滑动滑块选择信任度：1=极不信任，3=中立，5=极度信任"
+            help="1=极不信任，3=中立，5=极度信任"
         )
-        st.caption("💡 提示：请滑动上方滑块选择您对AI辅助诊断的初始信任度（1-5分）")
+        st.caption("💡 提示：请滑动滑块选择信任度（1-5分）")
         
         if st.form_submit_button("✅ 提交信息并开始测试"):
             level_prefix = {
@@ -336,6 +405,10 @@ def test_step():
             st.rerun()
         return
     
+    # 确保Google Sheets连接有效
+    if st.session_state.gs_sheet is None:
+        st.session_state.gs_sheet = init_google_sheets()
+    
     idx = st.session_state.current_idx
     test_set = st.session_state.test_set
     
@@ -355,10 +428,10 @@ def test_step():
     
     image_url = get_github_image_url(image_id)
     try:
-        st.image(image_url, use_container_width=True, caption=f"原始图片ID：{image_id}\n实际加载：{image_url.split('/')[-1]}")
-    except:
-        st.image("https://via.placeholder.com/600x400?text=图片加载失败", use_container_width=True)
-        st.warning(f"⚠️ 图片ID {image_id} 加载失败，请检查GitHub路径")
+        st.image(image_url, use_container_width=True, caption=f"当前图片：{image_url.split('/')[-1]}")
+    except Exception as e:
+        st.image("https://via.placeholder.com/600x400?text=图片加载异常", use_container_width=True)
+        st.toast(f"⚠️ 图片加载异常：{str(e)}", icon="⚠️")
     
     col1, col2 = st.columns([1, 1])
     with col1:
@@ -383,7 +456,7 @@ def test_step():
                 st.session_state.show_ai = True
                 st.rerun()
             if not is_valid:
-                st.caption("请先选择Top1")
+                st.caption("⚠️ 请先选择Top1诊断结果")
     
     with col2:
         if st.session_state.show_ai:
@@ -392,7 +465,7 @@ def test_step():
             initial_top1 = st.session_state.initial_top[0]
             
             if st.session_state.ai_same_as_initial:
-                st.success(f"✅ 您的初始诊断（{initial_top1}）与AI建议（{ai_sug}）一致！无需额外选择")
+                st.success(f"✅ 您的初始诊断（{initial_top1}）与AI建议（{ai_sug}）一致！")
                 
                 if st.button("✅ 确认结果并进入下一题", key=f"btn_{idx}"):
                     time_post_ai = round(time.time() - st.session_state.question_start, 2)
@@ -451,15 +524,16 @@ def test_step():
                         "submit_time": time.strftime("%Y-%m-%d %H:%M:%S")
                     }
                     
-                    st.session_state.user_results.append(result)
+                    # 保存数据到Google Sheets
                     save_result_to_backend(result)
+                    st.session_state.user_results.append(result)
                     
                     reset_test_state()
                     st.session_state.current_idx = idx + 1
                     st.rerun()
             
             else:
-                st.warning(f"⚠️ 您的初始诊断（{initial_top1}）与AI建议（{ai_sug}）不一致！请选择处理方式")
+                st.warning(f"⚠️ 您的初始诊断（{initial_top1}）与AI建议（{ai_sug}）不一致！")
                 interaction_type = "冲突"
                 
                 st.markdown("#### 交互动作选择")
@@ -539,125 +613,94 @@ def test_step():
                         "submit_time": time.strftime("%Y-%m-%d %H:%M:%S")
                     }
                     
-                    st.session_state.user_results.append(result)
+                    # 保存数据到Google Sheets
                     save_result_to_backend(result)
+                    st.session_state.user_results.append(result)
                     
                     reset_test_state()
                     st.session_state.current_idx = idx + 1
                     st.rerun()
 
-# === 结果展示 + 数据下载 ===
+# === 结果展示（从Google Sheets读取数据） ===
 def result_step():
     st.title("🏁 测试完成！研究数据可视化报告")
-    st.success(f"✅ 您的测试已完成！您的唯一标识ID：{st.session_state.doctor_id}")
-    st.info("📌 所有数据均匿名存储，已同步到Google Sheets")
+    st.success(f"✅ 您的测试已完成！唯一标识ID：{st.session_state.doctor_id}")
+    st.info("📌 所有数据已唯一存储到Google Sheets")
     
-    results = st.session_state.user_results
-    if not results:
-        st.warning("暂无答题结果")
-        if st.button("🔄 重新开始测试"):
-            init_session_state()
-            st.rerun()
-        return
-    
-    df = pd.DataFrame(results)
-    
-    # 1. 机构层级准确率
-    st.subheader("1. 机构层级：不同医院的诊断准确率")
-    hospital_group = df.groupby("hospital_level").agg(
-        initial_top1=("is_initial_top1_correct", "mean"),
-        final_top1=("is_final_top1_correct", "mean"),
-        initial_top3=("is_initial_top3_correct", "mean"),
-        final_top3=("is_final_top3_correct", "mean")
-    ).reset_index()
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-    x = np.arange(len(hospital_group["hospital_level"]))
-    width = 0.35
-    ax1.bar(x-width/2, hospital_group["initial_top1"], width, label="初始诊断", color="#4285F4")
-    ax1.bar(x+width/2, hospital_group["final_top1"], width, label="AI辅助后", color="#34A853")
-    ax1.set_title("Top-1准确率（按机构）")
-    ax1.set_xlabel("机构类型")
-    ax1.set_ylabel("准确率")
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(hospital_group["hospital_level"], rotation=15)
-    ax1.legend()
-    ax2.bar(x-width/2, hospital_group["initial_top3"], width, label="初始诊断", color="#FBBC05")
-    ax2.bar(x+width/2, hospital_group["final_top3"], width, label="AI辅助后", color="#EA4335")
-    ax2.set_title("Top-3准确率（按机构）")
-    ax2.set_xlabel("机构类型")
-    ax2.set_ylabel("准确率")
-    ax2.set_xticks(x)
-    ax2.set_xticklabels(hospital_group["hospital_level"], rotation=15)
-    ax2.legend()
-    st.pyplot(fig)
-
-    # 2. 经验水平表现
-    st.subheader("2. 经验水平：不同年限医生的表现")
-    df["year_group"] = df["work_years"].map(lambda x: "低年限(≤5年)" if "≤5年" in x else "中年限(5-15年)" if "5-15年" in x else "高年限(>15年)" if ">15年" in x else "无经验(实习生)")
-    year_group = df.groupby("year_group").agg(
-        initial_top1=("is_initial_top1_correct", "mean"),
-        final_top1=("is_final_top1_correct", "mean"),
-        use_ai=("use_ai", "mean")
-    ).reset_index()
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-    ax1.bar(year_group["year_group"], year_group["initial_top1"], label="初始诊断", color="#4285F4")
-    ax1.bar(year_group["year_group"], year_group["final_top1"], bottom=year_group["initial_top1"], label="AI辅助后提升", color="#34A853")
-    ax1.set_title("Top-1准确率（按经验）")
-    ax1.set_xlabel("经验水平")
-    ax1.set_ylabel("准确率")
-    ax1.set_xticklabels(year_group["year_group"], rotation=15)
-    ax1.legend()
-    ax2.bar(year_group["year_group"], year_group["use_ai"], color="#FBBC05")
-    ax2.set_title("AI使用频率（按经验）")
-    ax2.set_xlabel("经验水平")
-    ax2.set_ylabel("使用频率")
-    ax2.set_xticklabels(year_group["year_group"], rotation=15)
-    st.pyplot(fig)
-
-    # 3. 接诊量与AI依赖度
-    st.subheader("3. 接诊量：不同接诊量的AI依赖度")
-    load_group = df.groupby("daily_patients")["use_ai"].mean().reset_index()
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.bar(load_group["daily_patients"], load_group["use_ai"], color="#4285F4")
-    ax.set_title("AI依赖度（按接诊量）")
-    ax.set_xlabel("日均接诊量")
-    ax.set_ylabel("AI依赖度")
-    ax.set_xticklabels(load_group["daily_patients"], rotation=15)
-    st.pyplot(fig)
-
-    # 4. 初始信任度与AI采纳率
-    st.subheader("4. 信任度：初始信任度与AI采纳率")
-    trust_group = df.groupby("prior_ai_trust")["use_ai"].mean().reset_index()
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.plot(trust_group["prior_ai_trust"], trust_group["use_ai"], marker="o", color="#34A853")
-    ax.set_title("初始信任度与AI采纳率的关系")
-    ax.set_xlabel("初始信任度（1-5分）")
-    ax.set_ylabel("AI采纳率")
-    st.pyplot(fig)
-
-    # 新增：数据下载功能
-    st.subheader("📥 数据导出")
-    col1, col2 = st.columns(2)
-    with col1:
-        if os.path.exists(BACKEND_CSV_PATH):
-            with open(BACKEND_CSV_PATH, "r", encoding="utf-8-sig") as f:
-                csv_data = f.read()
-            st.download_button(
-                label="下载本地完整数据（CSV）",
-                data=csv_data,
-                file_name=f"skin_diagnosis_local_{time.strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
-            )
-        else:
-            st.info("暂无本地数据可下载")
-    with col2:
-        user_csv = df.to_csv(index=False, encoding="utf-8-sig")
+    # 从Google Sheets读取当前用户数据
+    try:
+        if st.session_state.gs_sheet is None:
+            st.session_state.gs_sheet = init_google_sheets()
+        
+        # 读取所有数据并筛选当前用户
+        all_data = st.session_state.gs_sheet.get_all_records()
+        df = pd.DataFrame(all_data)
+        user_df = df[df["doctor_id"] == st.session_state.doctor_id]
+        
+        if len(user_df) == 0:
+            st.warning("⚠️ 未查询到您的答题数据")
+            st.warning("可能是数据存储延迟，请稍后刷新或重新测试")
+            if st.button("🔄 重新开始测试"):
+                init_session_state()
+                st.rerun()
+            return
+        
+        # 1. 核心诊断指标
+        st.subheader("📊 你的诊断表现")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            initial_acc = user_df["is_initial_top1_correct"].mean() * 100
+            st.metric("初始诊断准确率", f"{initial_acc:.1f}%")
+        with col2:
+            final_acc = user_df["is_final_top1_correct"].mean() * 100
+            st.metric("最终诊断准确率", f"{final_acc:.1f}%", delta=f"{final_acc - initial_acc:.1f}%")
+        with col3:
+            ai_usage = user_df["use_ai"].sum()
+            st.metric("采纳AI建议次数", ai_usage)
+        
+        # 2. 信心变化趋势
+        st.subheader("📈 诊断信心变化")
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.plot(user_df.index + 1, user_df["initial_confidence"], marker='o', label='初始信心', color='#4285F4')
+        ax.plot(user_df.index + 1, user_df["final_confidence"], marker='s', label='最终信心', color='#34A853')
+        ax.set_xlabel("题目序号")
+        ax.set_ylabel("信心评分（1-10）")
+        ax.set_title("每道题的诊断信心变化")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        st.pyplot(fig)
+        
+        # 3. AI交互分析
+        st.subheader("🤖 AI交互分析")
+        conflict_df = user_df[user_df["interaction_type"] == "冲突"]
+        if len(conflict_df) > 0:
+            misled_count = conflict_df["is_misled"].sum()
+            rescued_count = conflict_df["is_rescued"].sum()
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("被AI误导次数", misled_count)
+            with col2:
+                st.metric("被AI纠正次数", rescued_count)
+        
+        # 4. 详细答题数据
+        st.subheader("📋 详细答题记录")
+        display_df = user_df[["image_id", "true_label", "initial_top1", "final_top1", "ai_label", "action_taken"]]
+        display_df.columns = ["图片ID", "真实诊断", "你的初始诊断", "你的最终诊断", "AI建议", "处理方式"]
+        st.dataframe(display_df, use_container_width=True)
+        
+        # 5. 数据下载（从Google Sheets导出）
+        st.subheader("📥 数据导出")
+        user_csv = user_df.to_csv(index=False, encoding="utf-8-sig")
         st.download_button(
-            label="下载本次答题数据（CSV）",
+            label="下载你的答题数据（CSV）",
             data=user_csv,
-            file_name=f"skin_diagnosis_user_{st.session_state.doctor_id}_{time.strftime('%Y%m%d_%H%M%S')}.csv",
+            file_name=f"skin_diagnosis_{st.session_state.doctor_id}_{time.strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv"
         )
+    
+    except Exception as e:
+        st.error(f"⚠️ 数据展示失败：{str(e)}")
+        st.error("请检查网络连接和Google Sheets权限")
     
     if st.button("🔄 重新开始测试"):
         init_session_state()
@@ -669,7 +712,7 @@ def main():
         import gspread
         import oauth2client
     except ImportError:
-        st.error("⚠️ 缺少Google Sheets依赖库，请先运行：pip install gspread oauth2client")
+        st.error("⚠️ 缺少依赖库，请运行：pip install gspread oauth2client")
         st.stop()
     
     init_session_state()
