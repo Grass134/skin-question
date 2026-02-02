@@ -12,6 +12,7 @@ import json  # 新增：用于解析Secrets中的JSON字符串
 # 新增：Google Sheets相关导入
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import re  # 新增：用于提取编号
 
 # === 核心配置 ===
 st.set_option('client.showErrorDetails', True)  # 修改：开启错误详情，方便调试
@@ -256,54 +257,67 @@ def reset_test_state():
     st.session_state.ai_same_as_initial = False
     st.session_state.user_results = []
 
-# === 图片加载（核心修改：适配P2/P3等新图片名） ===
+# === 图片加载（核心优化：适配带-1/-2后缀的重命名图片） ===
 def get_github_image_url(image_id):
     """
-    适配修改后的图片名（P2/P3等），优先匹配：
-    1. vitiligo文件夹下的P2/P3等图片
-    2. pityrasis-alba-images文件夹下的P2/P3等图片
-    3. PSORIASIS文件夹下的图片
-    4. 根文件夹下的图片
+    适配你的重命名规则：
+    1. 从原始image_id中提取4位数字编号
+    2. 支持基础名（如vitiligo-0001.jpg）和带后缀名（如pityrasis-alba-0015-1.jpg）
+    3. 拼接对应文件夹路径并优先加载
     """
-    # 核心修改：先尝试将原始image_id映射为P2/P3（如果需要固定映射）
-    # 如果你的image_id本身已经是P2/P3，可注释掉下面的映射逻辑
-    image_mapping = {
-        # 示例：原始image_id -> 新图片名（根据你的实际映射关系修改）
-        "vitiligo_original_001": "P2",
-        "pityrasis_alba_original_001": "P3",
-        "vitiligo_original_002": "P4",
-        "pityrasis_alba_original_002": "P5"
-    }
-    
-    # 使用映射后的图片名（如果有映射），否则用原始image_id
-    new_image_id = image_mapping.get(image_id, image_id)
-    
-    possible_paths = [
-        # 优先查找vitiligo文件夹下的P2/P3等图片
-        f"{GITHUB_IMAGE_FOLDER}/vitiligo/{new_image_id}.jpg",
-        f"{GITHUB_IMAGE_FOLDER}/vitiligo/{new_image_id}.png",
-        # 其次查找pityrasis-alba-images文件夹下的P2/P3等图片
-        f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/{new_image_id}.jpg",
-        f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/{new_image_id}.png",
-        # 保留PSORIASIS文件夹
-        f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{new_image_id}.jpg",
-        f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{new_image_id}.png",
-        # 根文件夹兜底
-        f"{GITHUB_IMAGE_FOLDER}/{new_image_id}.jpg",
-        f"{GITHUB_IMAGE_FOLDER}/{new_image_id}.png"
+    # 步骤1：从原始image_id中提取4位数字编号
+    number_match = re.search(r'(\d{4})', image_id)
+    if not number_match:
+        st.warning(f"⚠️ 无法从image_id {image_id} 中提取4位编号")
+        return "https://via.placeholder.com/600x400?text=无法提取编号"
+    file_number = number_match.group(1)  # 提取到的4位编号（比如0001）
+
+    # 步骤2：根据原始image_id中的关键词，确定文件夹和前缀
+    if 'vitiligo' in image_id.lower():
+        folder = "vitiligo"
+        prefix = "vitiligo"
+    elif 'pityriasis-alba' in image_id.lower():
+        folder = "pityrasis-alba-images"
+        prefix = "pityrasis-alba"
+    elif 'psoriasis' in image_id.lower():
+        folder = "PSORIASIS"
+        prefix = "psoriasis"
+    else:
+        folder = ""
+        prefix = "skin-image"
+        st.warning(f"⚠️ image_id {image_id} 未匹配到已知分类")
+
+    # 步骤3：生成所有可能的图片名（包括带后缀的格式）
+    possible_names = [
+        f"{prefix}-{file_number}",          # 基础名：如pityrasis-alba-0015
+        f"{prefix}-{file_number}-1",       # 带-1后缀：如pityrasis-alba-0015-1
+        f"{prefix}-{file_number}-2",       # 带-2后缀：如pityrasis-alba-0015-2
+        f"{prefix}-{file_number}-3"        # 带-3后缀：如pityrasis-alba-0015-3
     ]
-    
+
+    # 步骤4：拼接所有可能的路径（按优先级）
+    possible_paths = []
+    for name in possible_names:
+        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{folder}/{name}.jpg")
+        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{folder}/{name}.png")
+    # 兜底：根文件夹
+    for name in possible_names:
+        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{name}.jpg")
+        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{name}.png")
+
+    # 步骤5：尝试加载图片
     for path in possible_paths:
         raw_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{path}"
         try:
             response = requests.head(raw_url, timeout=3)
             if response.status_code == 200:
+                st.success(f"✅ 成功加载图片：{raw_url}")
                 return raw_url
         except:
             continue
-    
-    # 调试：显示尝试过的图片路径
-    st.warning(f"⚠️ 图片加载失败 - 尝试过的路径：{possible_paths}")
+
+    # 加载失败：显示尝试过的路径（仅前10个，避免过长）
+    st.warning(f"⚠️ 图片加载失败 - 尝试过的路径：{possible_paths[:10]}...")
     return "https://via.placeholder.com/600x400?text=图片未找到"
 
 # === 医生信息采集 ===
@@ -388,7 +402,7 @@ def test_step():
     
     image_url = get_github_image_url(image_id)
     try:
-        st.image(image_url, use_container_width=True, caption=f"图片ID：{image_id}（实际加载：{image_url.split('/')[-1]}）")
+        st.image(image_url, use_container_width=True, caption=f"原始图片ID：{image_id}\n实际加载：{image_url.split('/')[-1]}")
     except:
         st.image("https://via.placeholder.com/600x400?text=图片加载失败", use_container_width=True)
         st.warning(f"⚠️ 图片ID {image_id} 加载失败，请检查GitHub路径")
