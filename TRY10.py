@@ -218,50 +218,46 @@ def reset_test_state():
     st.session_state.ai_same_as_initial = False
     st.session_state.user_results = []
 
-# === 图片加载（最终适配所有文件夹命名） ===
+# === 图片加载（最终适配所有命名规则） ===
 def get_github_image_url(image_id):
     """
-    最终适配逻辑：
-    1. vitiligo文件夹：短命名（vitiligo-xxxx.jpg）
-    2. pityrasis-alba-images文件夹：短命名（pityrasis-alba-xxxx.jpg）+ 原始长文件名
-    3. PSORIASIS文件夹：原始长文件名
-    4. 外部平铺：原始文件名
+    最终适配：
+    1. pityrasis-alba-images：短命名（pityrasis-alba-xxxx.jpg）
+    2. vitiligo：短命名（vitiligo-xxxx.jpg）
+    3. 其他（PSORIASIS/ISIC_）：原始文件名
     """
     possible_paths = []
     # 清理image_id后缀
     image_id_clean = re.sub(r'\.(jpg|png)$', '', image_id)
 
-    # 分类1：pityrasis-alba-images文件夹
+    # 分类1：pityrasis-alba-images文件夹（短命名）
     if 'pityrasis-alba' in image_id_clean.lower():
-        # 先尝试原始长文件名（直接用image_id_clean）
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/{image_id_clean}.jpg")
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/{image_id_clean}.png")
-        # 再尝试短命名（提取数字）
+        # 提取数字（如0015）
         number_match = re.search(r'(\d+)', image_id_clean)
         if number_match:
             file_number = number_match.group(1).zfill(4)
+            # 尝试所有短命名格式（含后缀）
             possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}.jpg")
-            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}.png")
             possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}-1.jpg")
             possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}-2.jpg")
+            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}-3.jpg")
 
-    # 分类2：vitiligo文件夹
+    # 分类2：vitiligo文件夹（短命名）
     elif 'vitiligo' in image_id_clean.lower():
+        # 提取数字（如0318）
         number_match = re.search(r'(\d+)', image_id_clean)
         if number_match:
             file_number = number_match.group(1).zfill(4)
             possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/vitiligo/vitiligo-{file_number}.jpg")
-            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/vitiligo/vitiligo-{file_number}.png")
+            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/vitiligo/vitiligo-{file_number}-1.jpg")
 
-    # 分类3：PSORIASIS文件夹
+    # 分类3：PSORIASIS文件夹（原始名）
     elif 'psoriasis' in image_id_clean.lower():
         possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id_clean}.jpg")
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id_clean}.png")
 
-    # 分类4：其他情况（外部平铺）
-    else:
+    # 分类4：ISIC_平铺文件（原始名）
+    elif image_id_clean.startswith('ISIC_'):
         possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{image_id_clean}.jpg")
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{image_id_clean}.png")
 
     # 尝试加载图片
     for path in possible_paths:
