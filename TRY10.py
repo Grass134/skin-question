@@ -50,18 +50,12 @@ def init_google_sheets():
             "https://www.googleapis.com/auth/drive"
         ]
         
-        st.write("📝 调试信息 - Secrets中的所有键：", list(st.secrets.keys()))
-        if "GOOGLE_CREDENTIALS" in st.secrets:
-            st.write("✅ 检测到GOOGLE_CREDENTIALS键")
-            st.write("🔍 密钥类型：", type(st.secrets["GOOGLE_CREDENTIALS"]))
-            st.write("🔍 密钥内容片段：", str(st.secrets["GOOGLE_CREDENTIALS"])[:100])
-        
+        # 尝试从Streamlit Secrets读取（线上部署）
         try:
             creds_content = st.secrets["GOOGLE_CREDENTIALS"]
             if isinstance(creds_content, str):
                 try:
                     creds_dict = json.loads(creds_content)
-                    st.success("✅ JSON字符串解析成功")
                 except json.JSONDecodeError as e:
                     st.error(f"❌ JSON解析失败：{str(e)}")
                     st.error("🔍 请检查Secrets中的JSON格式是否正确")
@@ -76,8 +70,8 @@ def init_google_sheets():
                 raise ValueError(f"Missing required fields: {missing_fields}")
             
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-            st.success("✅ 从Streamlit Secrets加载Google凭证成功")
         
+        # Secrets读取失败时，尝试本地文件（本地运行）
         except KeyError:
             st.info("ℹ️ 未检测到Streamlit Secrets中的GOOGLE_CREDENTIALS键，尝试加载本地密钥文件")
             if not os.path.exists(LOCAL_GOOGLE_CREDENTIALS_FILE):
@@ -85,12 +79,10 @@ def init_google_sheets():
             creds = ServiceAccountCredentials.from_json_keyfile_name(
                 LOCAL_GOOGLE_CREDENTIALS_FILE, scope
             )
-            st.success("✅ 从本地文件加载Google凭证成功")
         
         client = gspread.authorize(creds)
         try:
             sheet = client.open(GOOGLE_SHEET_NAME).sheet1
-            st.success(f"✅ 成功打开Google表格：{GOOGLE_SHEET_NAME}")
         except gspread.exceptions.SpreadsheetNotFound:
             st.error(f"❌ 未找到Google表格：{GOOGLE_SHEET_NAME}")
             st.error("🔍 请检查表格名称是否完全一致，且该服务账号有访问权限")
@@ -187,7 +179,6 @@ def save_result_to_backend(result):
             index=False,
             encoding="utf-8-sig"
         )
-        st.success("✅ 数据已保存到本地CSV")
     except Exception as e:
         st.warning(f"本地CSV保存失败：{str(e)}")
     
@@ -209,7 +200,6 @@ def save_result_to_backend(result):
                 result["submit_time"]
             ]
             st.session_state.gs_sheet.append_row(row_data)
-            st.success("✅ 数据已同步到Google Sheets")
         except Exception as e:
             st.warning(f"Google Sheets同步失败：{str(e)}")
 
@@ -228,26 +218,25 @@ def reset_test_state():
     st.session_state.ai_same_as_initial = False
     st.session_state.user_results = []
 
-# === 图片加载（修复重复后缀问题） ===
+# === 图片加载（最终适配所有文件夹命名） ===
 def get_github_image_url(image_id):
     """
-    修复：避免给已包含后缀的image_id重复加后缀
+    最终适配逻辑：
+    1. vitiligo文件夹：短命名（vitiligo-xxxx.jpg）
+    2. pityrasis-alba-images文件夹：短命名（pityrasis-alba-xxxx.jpg）+ 原始长文件名
+    3. PSORIASIS文件夹：原始长文件名
+    4. 外部平铺：原始文件名
     """
     possible_paths = []
-
-    # 先移除image_id中可能已有的后缀（如.jpg/.png）
+    # 清理image_id后缀
     image_id_clean = re.sub(r'\.(jpg|png)$', '', image_id)
 
-    # 分类1：vitiligo文件夹（缩短命名）
-    if 'vitiligo' in image_id_clean.lower():
-        number_match = re.search(r'(\d+)', image_id_clean)
-        if number_match:
-            file_number = number_match.group(1).zfill(4)
-            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/vitiligo/vitiligo-{file_number}.jpg")
-            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/vitiligo/vitiligo-{file_number}.png")
-
-    # 分类2：pityrasis-alba-images文件夹（缩短命名）
-    elif 'pityrasis-alba' in image_id_clean.lower():
+    # 分类1：pityrasis-alba-images文件夹
+    if 'pityrasis-alba' in image_id_clean.lower():
+        # 先尝试原始长文件名（直接用image_id_clean）
+        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/{image_id_clean}.jpg")
+        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/{image_id_clean}.png")
+        # 再尝试短命名（提取数字）
         number_match = re.search(r'(\d+)', image_id_clean)
         if number_match:
             file_number = number_match.group(1).zfill(4)
@@ -256,13 +245,20 @@ def get_github_image_url(image_id):
             possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}-1.jpg")
             possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}-2.jpg")
 
-    # 分类3：PSORIASIS文件夹（原始长文件名）
+    # 分类2：vitiligo文件夹
+    elif 'vitiligo' in image_id_clean.lower():
+        number_match = re.search(r'(\d+)', image_id_clean)
+        if number_match:
+            file_number = number_match.group(1).zfill(4)
+            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/vitiligo/vitiligo-{file_number}.jpg")
+            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/vitiligo/vitiligo-{file_number}.png")
+
+    # 分类3：PSORIASIS文件夹
     elif 'psoriasis' in image_id_clean.lower():
-        # 直接用清理后的image_id作为文件名
         possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id_clean}.jpg")
         possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id_clean}.png")
 
-    # 分类4：其他情况（外部平铺的ISIC图片）
+    # 分类4：其他情况（外部平铺）
     else:
         possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{image_id_clean}.jpg")
         possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{image_id_clean}.png")
@@ -273,7 +269,6 @@ def get_github_image_url(image_id):
         try:
             response = requests.head(raw_url, timeout=3)
             if response.status_code == 200:
-                st.success(f"✅ 成功加载图片：{raw_url}")
                 return raw_url
         except:
             continue
