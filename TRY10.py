@@ -14,7 +14,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 # === 核心配置 ===
-st.set_option('client.showErrorDetails', False)
+st.set_option('client.showErrorDetails', True)  # 修改：开启错误详情，方便调试
 st.set_page_config(page_title="皮肤病AI辅助诊断研究", page_icon="🩺", layout="wide")
 
 # 你的GitHub信息
@@ -26,7 +26,7 @@ GOLD_TXT = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/m
 BACKEND_CSV_PATH = "skin_diagnosis_backend_data.csv"
 
 # ========== Google Sheets配置（关键修改：移除本地密钥文件配置） ==========
-GOOGLE_SHEET_NAME = "皮肤诊断数据"  # 你的Google表格名称
+GOOGLE_SHEET_NAME = "皮肤诊断数据"  # 确认你的Google表格名称完全一致！
 # 本地运行时的备用密钥文件（线上部署时不会用到）
 LOCAL_GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
 
@@ -43,7 +43,7 @@ DISEASE_LABELS = {
 ALL_CLASSES = list(DISEASE_LABELS.values())
 TEST_COUNT = 10
 
-# === 初始化Google Sheets连接（核心修改：从Secrets读取密钥） ===
+# === 初始化Google Sheets连接（核心修改：修复Secrets读取逻辑） ===
 def init_google_sheets():
     """初始化Google Sheets连接，返回表格对象
     优先从Streamlit Secrets读取密钥，本地运行时fallback到本地文件
@@ -54,31 +54,65 @@ def init_google_sheets():
             "https://www.googleapis.com/auth/drive"
         ]
         
+        # ========== 关键修改1：增加详细调试信息 ==========
+        st.write("📝 调试信息 - Secrets中的所有键：", list(st.secrets.keys()))
+        if "GOOGLE_CREDENTIALS" in st.secrets:
+            st.write("✅ 检测到GOOGLE_CREDENTIALS键")
+            st.write("🔍 密钥类型：", type(st.secrets["GOOGLE_CREDENTIALS"]))
+            # 显示前100个字符（避免泄露完整密钥）
+            st.write("🔍 密钥内容片段：", str(st.secrets["GOOGLE_CREDENTIALS"])[:100])
+        
+        # ========== 关键修改2：简化并修复Secrets读取逻辑 ==========
         # 第一步：尝试从Streamlit Secrets读取（线上部署）
         try:
-            # 从Secrets读取JSON字符串并解析为字典
-            creds_json = st.secrets["GOOGLE_CREDENTIALS"]
-            if isinstance(creds_json, str):
-                creds_dict = json.loads(creds_json)
+            # 从Secrets读取内容
+            creds_content = st.secrets["GOOGLE_CREDENTIALS"]
+            
+            # 处理不同格式：如果是字符串则解析为JSON，否则直接使用字典
+            if isinstance(creds_content, str):
+                try:
+                    creds_dict = json.loads(creds_content)
+                    st.success("✅ JSON字符串解析成功")
+                except json.JSONDecodeError as e:
+                    st.error(f"❌ JSON解析失败：{str(e)}")
+                    st.error("🔍 请检查Secrets中的JSON格式是否正确（是否有多余/缺失的逗号、引号）")
+                    raise
             else:
-                creds_dict = creds_json
+                creds_dict = creds_content
+            
+            # 验证必要字段
+            required_fields = ["type", "project_id", "private_key", "client_email"]
+            missing_fields = [f for f in required_fields if f not in creds_dict]
+            if missing_fields:
+                st.error(f"❌ 密钥缺少必要字段：{missing_fields}")
+                raise ValueError(f"Missing required fields: {missing_fields}")
+            
             # 从字典加载凭证
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             st.success("✅ 从Streamlit Secrets加载Google凭证成功")
         
         # 第二步：Secrets读取失败时，尝试本地文件（本地运行）
-        except (KeyError, json.JSONDecodeError):
-            st.info("ℹ️ 未检测到Streamlit Secrets，尝试加载本地密钥文件")
+        except KeyError:
+            st.info("ℹ️ 未检测到Streamlit Secrets中的GOOGLE_CREDENTIALS键，尝试加载本地密钥文件")
             if not os.path.exists(LOCAL_GOOGLE_CREDENTIALS_FILE):
                 raise FileNotFoundError(f"本地密钥文件 {LOCAL_GOOGLE_CREDENTIALS_FILE} 不存在")
             # 从本地文件加载凭证
             creds = ServiceAccountCredentials.from_json_keyfile_name(
                 LOCAL_GOOGLE_CREDENTIALS_FILE, scope
             )
+            st.success("✅ 从本地文件加载Google凭证成功")
         
-        # 授权并打开表格
+        # ========== 关键修改3：增加表格打开的错误处理 ==========
+        # 授权并打开表格（确认表格名称完全一致）
         client = gspread.authorize(creds)
-        sheet = client.open(GOOGLE_SHEET_NAME).sheet1
+        try:
+            sheet = client.open(GOOGLE_SHEET_NAME).sheet1
+            st.success(f"✅ 成功打开Google表格：{GOOGLE_SHEET_NAME}")
+        except gspread.exceptions.SpreadsheetNotFound:
+            st.error(f"❌ 未找到Google表格：{GOOGLE_SHEET_NAME}")
+            st.error("🔍 请检查表格名称是否完全一致（包括空格、中文标点），且该服务账号有访问权限")
+            raise
+        
         return sheet
     
     except Exception as e:
@@ -114,24 +148,9 @@ def init_session_state():
         if key not in st.session_state:
             st.session_state[key] = value
     
-    # 初始化Google Sheets连接
-    if st.session_state.gs_sheet is None:
-        st.session_state.gs_sheet = init_google_sheets()
-    
-    # 初始化本地CSV文件
-    if not os.path.exists(BACKEND_CSV_PATH):
-        header = [
-            "doctor_id", "hospital_level", "work_years", "daily_patients", "prior_ai_trust",
-            "image_id", "true_label", "ai_label", "ai_is_correct",
-            "initial_top1", "initial_top2", "initial_top3", "initial_confidence",
-            "is_initial_top1_correct", "is_initial_top3_correct",
-            "interaction_type", "action_taken", "use_ai",
-            "final_top1", "final_top2", "final_top3", "final_top4",
-            "is_final_top1_correct", "is_final_top3_correct", "is_final_top4_correct",
-            "final_confidence", "confidence_gain", "decision_path", "is_misled", "is_rescued",
-            "time_baseline", "time_post_ai", "submit_time"
-        ]
-        pd.DataFrame(columns=header).to_csv(BACKEND_CSV_PATH, index=False, encoding="utf-8-sig")
+    # ========== 关键修改4：延迟初始化Google Sheets，确保Secrets已加载 ==========
+    # 不在初始化时立即连接，而是在首次保存数据时初始化
+    # 避免页面加载时过早尝试读取Secrets
 
 # === 数据加载（稳定版本） ===
 @st.cache_data(ttl=300)
@@ -179,6 +198,11 @@ def load_balanced_test_set(df):
 # === 数据保存（本地CSV + Google Sheets同步） ===
 def save_result_to_backend(result):
     """保存数据到本地CSV，并同步到Google Sheets"""
+    # ========== 关键修改5：在保存数据时初始化Google Sheets ==========
+    # 首次保存时初始化Google Sheets连接
+    if st.session_state.gs_sheet is None:
+        st.session_state.gs_sheet = init_google_sheets()
+    
     # 1. 保存到本地CSV
     try:
         pd.DataFrame([result]).to_csv(
@@ -188,6 +212,7 @@ def save_result_to_backend(result):
             index=False,
             encoding="utf-8-sig"
         )
+        st.success("✅ 数据已保存到本地CSV")
     except Exception as e:
         st.warning(f"本地CSV保存失败：{str(e)}")
     
