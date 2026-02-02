@@ -228,49 +228,49 @@ def reset_test_state():
     st.session_state.ai_same_as_initial = False
     st.session_state.user_results = []
 
-# === 图片加载（核心修复：适配你的文件结构） ===
+# === 图片加载（完全适配当前文件结构） ===
 def get_github_image_url(image_id):
     """
-    适配你的文件结构：
-    1. 文件夹内图片：pityrasis-alba-images/vitiligo/PSORIASIS
-    2. 外部平铺图片：ISIC_xxxxxxx.jpg
+    适配规则：
+    1. vitiligo文件夹：图片是缩短后的命名（vitiligo-xxxx.jpg）
+    2. pityrasis-alba-images文件夹：图片是缩短后的命名（pityrasis-alba-xxxx.jpg）
+    3. PSORIASIS文件夹：图片是原始长文件名
     """
-    # 步骤1：先尝试直接加载原始image_id（适配外部平铺的ISIC图片）
-    possible_paths = [
-        f"{GITHUB_IMAGE_FOLDER}/{image_id}.jpg",
-        f"{GITHUB_IMAGE_FOLDER}/{image_id}.png"
-    ]
+    possible_paths = []
 
-    # 步骤2：尝试匹配文件夹内的图片（按分类）
+    # 分类1：vitiligo文件夹（缩短命名）
     if 'vitiligo' in image_id.lower():
-        folder = "vitiligo"
-        prefix = "vitiligo"
-    elif 'pityrasis-alba' in image_id.lower():
-        folder = "pityrasis-alba-images"
-        prefix = "pityrasis-alba"
-    elif 'psoriasis' in image_id.lower():
-        folder = "PSORIASIS"
-        prefix = "psoriasis"
-    else:
-        folder = ""
-        prefix = ""
-
-    # 如果匹配到分类，追加文件夹内的路径
-    if folder:
-        # 提取编号（兼容原命名规则）
+        # 提取编号（如从image_id中提取0001）
         number_match = re.search(r'(\d+)', image_id)
         if number_match:
-            file_number = number_match.group(1)
-            possible_names = [
-                f"{prefix}-{file_number}",
-                f"{prefix}-{file_number}-1",
-                f"{prefix}-{file_number}-2"
-            ]
-            for name in possible_names:
-                possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{folder}/{name}.jpg")
-                possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{folder}/{name}.png")
+            file_number = number_match.group(1).zfill(4)  # 补零为4位
+            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/vitiligo/vitiligo-{file_number}.jpg")
+            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/vitiligo/vitiligo-{file_number}.png")
 
-    # 步骤3：尝试加载图片
+    # 分类2：pityrasis-alba-images文件夹（缩短命名）
+    elif 'pityrasis-alba' in image_id.lower():
+        # 提取编号（如从image_id中提取0001）
+        number_match = re.search(r'(\d+)', image_id)
+        if number_match:
+            file_number = number_match.group(1).zfill(4)  # 补零为4位
+            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}.jpg")
+            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}.png")
+            # 补充带-1/-2后缀的格式
+            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}-1.jpg")
+            possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}-2.jpg")
+
+    # 分类3：PSORIASIS文件夹（原始长文件名）
+    elif 'psoriasis' in image_id.lower():
+        # 直接用原始image_id作为文件名
+        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id}.jpg")
+        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id}.png")
+
+    # 分类4：其他情况（外部平铺的ISIC图片）
+    else:
+        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{image_id}.jpg")
+        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{image_id}.png")
+
+    # 尝试加载图片
     for path in possible_paths:
         raw_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{path}"
         try:
