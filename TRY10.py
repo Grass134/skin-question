@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 import requests
 import io
+import json  # 新增：用于解析Secrets中的JSON字符串
 # 新增：Google Sheets相关导入
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -24,9 +25,10 @@ GOLD_TXT = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/m
 # ========== 本地CSV配置 ==========
 BACKEND_CSV_PATH = "skin_diagnosis_backend_data.csv"
 
-# ========== Google Sheets配置（关键：替换为你的信息） ==========
-GOOGLE_CREDENTIALS_FILE = "google_credentials.json"  # 下载的JSON密钥文件名
+# ========== Google Sheets配置（关键修改：移除本地密钥文件配置） ==========
 GOOGLE_SHEET_NAME = "皮肤诊断数据"  # 你的Google表格名称
+# 本地运行时的备用密钥文件（线上部署时不会用到）
+LOCAL_GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
 
 # GitHub图片文件夹配置
 GITHUB_IMAGE_FOLDER = "experiment_pool"
@@ -41,22 +43,44 @@ DISEASE_LABELS = {
 ALL_CLASSES = list(DISEASE_LABELS.values())
 TEST_COUNT = 10
 
-# === 初始化Google Sheets连接 ===
+# === 初始化Google Sheets连接（核心修改：从Secrets读取密钥） ===
 def init_google_sheets():
-    """初始化Google Sheets连接，返回表格对象"""
+    """初始化Google Sheets连接，返回表格对象
+    优先从Streamlit Secrets读取密钥，本地运行时fallback到本地文件
+    """
     try:
         scope = [
             "https://spreadsheets.google.com/feeds",
             "https://www.googleapis.com/auth/drive"
         ]
-        # 加载凭证
-        creds = ServiceAccountCredentials.from_json_keyfile_name(
-            GOOGLE_CREDENTIALS_FILE, scope
-        )
+        
+        # 第一步：尝试从Streamlit Secrets读取（线上部署）
+        try:
+            # 从Secrets读取JSON字符串并解析为字典
+            creds_json = st.secrets["GOOGLE_CREDENTIALS"]
+            if isinstance(creds_json, str):
+                creds_dict = json.loads(creds_json)
+            else:
+                creds_dict = creds_json
+            # 从字典加载凭证
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+            st.success("✅ 从Streamlit Secrets加载Google凭证成功")
+        
+        # 第二步：Secrets读取失败时，尝试本地文件（本地运行）
+        except (KeyError, json.JSONDecodeError):
+            st.info("ℹ️ 未检测到Streamlit Secrets，尝试加载本地密钥文件")
+            if not os.path.exists(LOCAL_GOOGLE_CREDENTIALS_FILE):
+                raise FileNotFoundError(f"本地密钥文件 {LOCAL_GOOGLE_CREDENTIALS_FILE} 不存在")
+            # 从本地文件加载凭证
+            creds = ServiceAccountCredentials.from_json_keyfile_name(
+                LOCAL_GOOGLE_CREDENTIALS_FILE, scope
+            )
+        
+        # 授权并打开表格
         client = gspread.authorize(creds)
-        # 打开表格
         sheet = client.open(GOOGLE_SHEET_NAME).sheet1
         return sheet
+    
     except Exception as e:
         st.warning(f"⚠️ Google Sheets连接失败：{str(e)}")
         st.warning("将仅保存到本地CSV文件，请检查凭证配置")
@@ -597,14 +621,17 @@ def result_step():
     col1, col2 = st.columns(2)
     with col1:
         # 导出本地CSV
-        with open(BACKEND_CSV_PATH, "r", encoding="utf-8-sig") as f:
-            csv_data = f.read()
-        st.download_button(
-            label="下载本地完整数据（CSV）",
-            data=csv_data,
-            file_name=f"skin_diagnosis_local_{time.strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv"
-        )
+        if os.path.exists(BACKEND_CSV_PATH):
+            with open(BACKEND_CSV_PATH, "r", encoding="utf-8-sig") as f:
+                csv_data = f.read()
+            st.download_button(
+                label="下载本地完整数据（CSV）",
+                data=csv_data,
+                file_name=f"skin_diagnosis_local_{time.strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("暂无本地数据可下载")
     with col2:
         # 导出当前用户数据
         user_csv = df.to_csv(index=False, encoding="utf-8-sig")
