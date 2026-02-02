@@ -8,3 +8,6 @@ pillow>=10.0.0
 matplotlib>=3.8.0
 seaborn>=0.13.0
 requests>=2.31.0
+# 新增：Google Sheets所需依赖
+gspread==5.12.0
+oauth2client==4.1.3
