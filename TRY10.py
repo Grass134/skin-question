@@ -8,14 +8,13 @@ import numpy as np
 from PIL import Image
 import requests
 import io
-import json  # 新增：用于解析Secrets中的JSON字符串
-# 新增：Google Sheets相关导入
+import json  
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import re  # 新增：用于提取编号
+import re  
 
 # === 核心配置 ===
-st.set_option('client.showErrorDetails', True)  # 修改：开启错误详情，方便调试
+st.set_option('client.showErrorDetails', True)  
 st.set_page_config(page_title="皮肤病AI辅助诊断研究", page_icon="🩺", layout="wide")
 
 # 你的GitHub信息
@@ -26,9 +25,8 @@ GOLD_TXT = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/m
 # ========== 本地CSV配置 ==========
 BACKEND_CSV_PATH = "skin_diagnosis_backend_data.csv"
 
-# ========== Google Sheets配置（关键修改：移除本地密钥文件配置） ==========
-GOOGLE_SHEET_NAME = "皮肤诊断数据"  # 确认你的Google表格名称完全一致！
-# 本地运行时的备用密钥文件（线上部署时不会用到）
+# ========== Google Sheets配置 ==========
+GOOGLE_SHEET_NAME = "皮肤诊断数据"  
 LOCAL_GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
 
 # GitHub图片文件夹配置
@@ -44,74 +42,58 @@ DISEASE_LABELS = {
 ALL_CLASSES = list(DISEASE_LABELS.values())
 TEST_COUNT = 10
 
-# === 初始化Google Sheets连接（核心修改：修复Secrets读取逻辑） ===
+# === 初始化Google Sheets连接 ===
 def init_google_sheets():
-    """初始化Google Sheets连接，返回表格对象
-    优先从Streamlit Secrets读取密钥，本地运行时fallback到本地文件
-    """
     try:
         scope = [
             "https://spreadsheets.google.com/feeds",
             "https://www.googleapis.com/auth/drive"
         ]
         
-        # ========== 关键修改1：增加详细调试信息 ==========
         st.write("📝 调试信息 - Secrets中的所有键：", list(st.secrets.keys()))
         if "GOOGLE_CREDENTIALS" in st.secrets:
             st.write("✅ 检测到GOOGLE_CREDENTIALS键")
             st.write("🔍 密钥类型：", type(st.secrets["GOOGLE_CREDENTIALS"]))
-            # 显示前100个字符（避免泄露完整密钥）
             st.write("🔍 密钥内容片段：", str(st.secrets["GOOGLE_CREDENTIALS"])[:100])
         
-        # ========== 关键修改2：简化并修复Secrets读取逻辑 ==========
-        # 第一步：尝试从Streamlit Secrets读取（线上部署）
         try:
-            # 从Secrets读取内容
             creds_content = st.secrets["GOOGLE_CREDENTIALS"]
-            
-            # 处理不同格式：如果是字符串则解析为JSON，否则直接使用字典
             if isinstance(creds_content, str):
                 try:
                     creds_dict = json.loads(creds_content)
                     st.success("✅ JSON字符串解析成功")
                 except json.JSONDecodeError as e:
                     st.error(f"❌ JSON解析失败：{str(e)}")
-                    st.error("🔍 请检查Secrets中的JSON格式是否正确（是否有多余/缺失的逗号、引号）")
+                    st.error("🔍 请检查Secrets中的JSON格式是否正确")
                     raise
             else:
                 creds_dict = creds_content
             
-            # 验证必要字段
             required_fields = ["type", "project_id", "private_key", "client_email"]
             missing_fields = [f for f in required_fields if f not in creds_dict]
             if missing_fields:
                 st.error(f"❌ 密钥缺少必要字段：{missing_fields}")
                 raise ValueError(f"Missing required fields: {missing_fields}")
             
-            # 从字典加载凭证
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             st.success("✅ 从Streamlit Secrets加载Google凭证成功")
         
-        # 第二步：Secrets读取失败时，尝试本地文件（本地运行）
         except KeyError:
             st.info("ℹ️ 未检测到Streamlit Secrets中的GOOGLE_CREDENTIALS键，尝试加载本地密钥文件")
             if not os.path.exists(LOCAL_GOOGLE_CREDENTIALS_FILE):
                 raise FileNotFoundError(f"本地密钥文件 {LOCAL_GOOGLE_CREDENTIALS_FILE} 不存在")
-            # 从本地文件加载凭证
             creds = ServiceAccountCredentials.from_json_keyfile_name(
                 LOCAL_GOOGLE_CREDENTIALS_FILE, scope
             )
             st.success("✅ 从本地文件加载Google凭证成功")
         
-        # ========== 关键修改3：增加表格打开的错误处理 ==========
-        # 授权并打开表格（确认表格名称完全一致）
         client = gspread.authorize(creds)
         try:
             sheet = client.open(GOOGLE_SHEET_NAME).sheet1
             st.success(f"✅ 成功打开Google表格：{GOOGLE_SHEET_NAME}")
         except gspread.exceptions.SpreadsheetNotFound:
             st.error(f"❌ 未找到Google表格：{GOOGLE_SHEET_NAME}")
-            st.error("🔍 请检查表格名称是否完全一致（包括空格、中文标点），且该服务账号有访问权限")
+            st.error("🔍 请检查表格名称是否完全一致，且该服务账号有访问权限")
             raise
         
         return sheet
@@ -143,17 +125,13 @@ def init_session_state():
         "time_baseline": 0,
         "doctor_id": "",
         "ai_same_as_initial": False,
-        "gs_sheet": None  # 存储Google Sheets连接对象
+        "gs_sheet": None
     }
     for key, value in default_states.items():
         if key not in st.session_state:
             st.session_state[key] = value
-    
-    # ========== 关键修改4：延迟初始化Google Sheets，确保Secrets已加载 ==========
-    # 不在初始化时立即连接，而是在首次保存数据时初始化
-    # 避免页面加载时过早尝试读取Secrets
 
-# === 数据加载（稳定版本） ===
+# === 数据加载 ===
 @st.cache_data(ttl=300)
 def load_gold_data():
     try:
@@ -196,15 +174,11 @@ def load_balanced_test_set(df):
     test_set = pd.concat([correct_sample, incorrect_sample]).sample(frac=1).reset_index(drop=True)
     return test_set.head(TEST_COUNT)
 
-# === 数据保存（本地CSV + Google Sheets同步） ===
+# === 数据保存 ===
 def save_result_to_backend(result):
-    """保存数据到本地CSV，并同步到Google Sheets"""
-    # ========== 关键修改5：在保存数据时初始化Google Sheets ==========
-    # 首次保存时初始化Google Sheets连接
     if st.session_state.gs_sheet is None:
         st.session_state.gs_sheet = init_google_sheets()
     
-    # 1. 保存到本地CSV
     try:
         pd.DataFrame([result]).to_csv(
             BACKEND_CSV_PATH,
@@ -217,10 +191,8 @@ def save_result_to_backend(result):
     except Exception as e:
         st.warning(f"本地CSV保存失败：{str(e)}")
     
-    # 2. 同步到Google Sheets
     if st.session_state.gs_sheet is not None:
         try:
-            # 将字典转为列表（按表头顺序）
             row_data = [
                 result["doctor_id"], result["hospital_level"], result["work_years"],
                 result["daily_patients"], result["prior_ai_trust"], result["image_id"],
@@ -236,13 +208,12 @@ def save_result_to_backend(result):
                 result["is_rescued"], result["time_baseline"], result["time_post_ai"],
                 result["submit_time"]
             ]
-            # 追加到Google Sheets
             st.session_state.gs_sheet.append_row(row_data)
             st.success("✅ 数据已同步到Google Sheets")
         except Exception as e:
             st.warning(f"Google Sheets同步失败：{str(e)}")
 
-# === 重置答题状态（不重置test_set） ===
+# === 重置答题状态 ===
 def reset_test_state():
     st.session_state.show_ai = False
     st.session_state.initial_top = ["请选择", "无", "无"]
@@ -257,26 +228,24 @@ def reset_test_state():
     st.session_state.ai_same_as_initial = False
     st.session_state.user_results = []
 
-# === 图片加载（核心优化：适配带-1/-2后缀的重命名图片） ===
+# === 图片加载（核心修复：适配你的文件结构） ===
 def get_github_image_url(image_id):
     """
-    适配你的重命名规则：
-    1. 从原始image_id中提取4位数字编号
-    2. 支持基础名（如vitiligo-0001.jpg）和带后缀名（如pityrasis-alba-0015-1.jpg）
-    3. 拼接对应文件夹路径并优先加载
+    适配你的文件结构：
+    1. 文件夹内图片：pityrasis-alba-images/vitiligo/PSORIASIS
+    2. 外部平铺图片：ISIC_xxxxxxx.jpg
     """
-    # 步骤1：从原始image_id中提取4位数字编号
-    number_match = re.search(r'(\d{4})', image_id)
-    if not number_match:
-        st.warning(f"⚠️ 无法从image_id {image_id} 中提取4位编号")
-        return "https://via.placeholder.com/600x400?text=无法提取编号"
-    file_number = number_match.group(1)  # 提取到的4位编号（比如0001）
+    # 步骤1：先尝试直接加载原始image_id（适配外部平铺的ISIC图片）
+    possible_paths = [
+        f"{GITHUB_IMAGE_FOLDER}/{image_id}.jpg",
+        f"{GITHUB_IMAGE_FOLDER}/{image_id}.png"
+    ]
 
-    # 步骤2：根据原始image_id中的关键词，确定文件夹和前缀
+    # 步骤2：尝试匹配文件夹内的图片（按分类）
     if 'vitiligo' in image_id.lower():
         folder = "vitiligo"
         prefix = "vitiligo"
-    elif 'pityriasis-alba' in image_id.lower():
+    elif 'pityrasis-alba' in image_id.lower():
         folder = "pityrasis-alba-images"
         prefix = "pityrasis-alba"
     elif 'psoriasis' in image_id.lower():
@@ -284,28 +253,24 @@ def get_github_image_url(image_id):
         prefix = "psoriasis"
     else:
         folder = ""
-        prefix = "skin-image"
-        st.warning(f"⚠️ image_id {image_id} 未匹配到已知分类")
+        prefix = ""
 
-    # 步骤3：生成所有可能的图片名（包括带后缀的格式）
-    possible_names = [
-        f"{prefix}-{file_number}",          # 基础名：如pityrasis-alba-0015
-        f"{prefix}-{file_number}-1",       # 带-1后缀：如pityrasis-alba-0015-1
-        f"{prefix}-{file_number}-2",       # 带-2后缀：如pityrasis-alba-0015-2
-        f"{prefix}-{file_number}-3"        # 带-3后缀：如pityrasis-alba-0015-3
-    ]
+    # 如果匹配到分类，追加文件夹内的路径
+    if folder:
+        # 提取编号（兼容原命名规则）
+        number_match = re.search(r'(\d+)', image_id)
+        if number_match:
+            file_number = number_match.group(1)
+            possible_names = [
+                f"{prefix}-{file_number}",
+                f"{prefix}-{file_number}-1",
+                f"{prefix}-{file_number}-2"
+            ]
+            for name in possible_names:
+                possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{folder}/{name}.jpg")
+                possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{folder}/{name}.png")
 
-    # 步骤4：拼接所有可能的路径（按优先级）
-    possible_paths = []
-    for name in possible_names:
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{folder}/{name}.jpg")
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{folder}/{name}.png")
-    # 兜底：根文件夹
-    for name in possible_names:
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{name}.jpg")
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{name}.png")
-
-    # 步骤5：尝试加载图片
+    # 步骤3：尝试加载图片
     for path in possible_paths:
         raw_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{path}"
         try:
@@ -316,7 +281,7 @@ def get_github_image_url(image_id):
         except:
             continue
 
-    # 加载失败：显示尝试过的路径（仅前10个，避免过长）
+    # 加载失败提示
     st.warning(f"⚠️ 图片加载失败 - 尝试过的路径：{possible_paths[:10]}...")
     return "https://via.placeholder.com/600x400?text=图片未找到"
 
@@ -686,7 +651,6 @@ def result_step():
     st.subheader("📥 数据导出")
     col1, col2 = st.columns(2)
     with col1:
-        # 导出本地CSV
         if os.path.exists(BACKEND_CSV_PATH):
             with open(BACKEND_CSV_PATH, "r", encoding="utf-8-sig") as f:
                 csv_data = f.read()
@@ -699,7 +663,6 @@ def result_step():
         else:
             st.info("暂无本地数据可下载")
     with col2:
-        # 导出当前用户数据
         user_csv = df.to_csv(index=False, encoding="utf-8-sig")
         st.download_button(
             label="下载本次答题数据（CSV）",
@@ -714,7 +677,6 @@ def result_step():
 
 # === 主函数 ===
 def main():
-    # 安装依赖提示（首次运行）
     try:
         import gspread
         import oauth2client
