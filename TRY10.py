@@ -228,47 +228,44 @@ def reset_test_state():
     st.session_state.ai_same_as_initial = False
     st.session_state.user_results = []
 
-# === 图片加载（完全适配当前文件结构） ===
+# === 图片加载（修复重复后缀问题） ===
 def get_github_image_url(image_id):
     """
-    适配规则：
-    1. vitiligo文件夹：图片是缩短后的命名（vitiligo-xxxx.jpg）
-    2. pityrasis-alba-images文件夹：图片是缩短后的命名（pityrasis-alba-xxxx.jpg）
-    3. PSORIASIS文件夹：图片是原始长文件名
+    修复：避免给已包含后缀的image_id重复加后缀
     """
     possible_paths = []
 
+    # 先移除image_id中可能已有的后缀（如.jpg/.png）
+    image_id_clean = re.sub(r'\.(jpg|png)$', '', image_id)
+
     # 分类1：vitiligo文件夹（缩短命名）
-    if 'vitiligo' in image_id.lower():
-        # 提取编号（如从image_id中提取0001）
-        number_match = re.search(r'(\d+)', image_id)
+    if 'vitiligo' in image_id_clean.lower():
+        number_match = re.search(r'(\d+)', image_id_clean)
         if number_match:
-            file_number = number_match.group(1).zfill(4)  # 补零为4位
+            file_number = number_match.group(1).zfill(4)
             possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/vitiligo/vitiligo-{file_number}.jpg")
             possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/vitiligo/vitiligo-{file_number}.png")
 
     # 分类2：pityrasis-alba-images文件夹（缩短命名）
-    elif 'pityrasis-alba' in image_id.lower():
-        # 提取编号（如从image_id中提取0001）
-        number_match = re.search(r'(\d+)', image_id)
+    elif 'pityrasis-alba' in image_id_clean.lower():
+        number_match = re.search(r'(\d+)', image_id_clean)
         if number_match:
-            file_number = number_match.group(1).zfill(4)  # 补零为4位
+            file_number = number_match.group(1).zfill(4)
             possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}.jpg")
             possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}.png")
-            # 补充带-1/-2后缀的格式
             possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}-1.jpg")
             possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/pityrasis-alba-{file_number}-2.jpg")
 
     # 分类3：PSORIASIS文件夹（原始长文件名）
-    elif 'psoriasis' in image_id.lower():
-        # 直接用原始image_id作为文件名
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id}.jpg")
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id}.png")
+    elif 'psoriasis' in image_id_clean.lower():
+        # 直接用清理后的image_id作为文件名
+        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id_clean}.jpg")
+        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id_clean}.png")
 
     # 分类4：其他情况（外部平铺的ISIC图片）
     else:
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{image_id}.jpg")
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{image_id}.png")
+        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{image_id_clean}.jpg")
+        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{image_id_clean}.png")
 
     # 尝试加载图片
     for path in possible_paths:
