@@ -8,6 +8,9 @@ import numpy as np
 from PIL import Image
 import requests
 import io
+# 新增：Google Sheets相关导入
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 # === 核心配置 ===
 st.set_option('client.showErrorDetails', False)
@@ -18,8 +21,12 @@ GITHUB_USERNAME = "Grass134"
 GITHUB_REPO = "skin-question"
 GOLD_TXT = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/main/boosted_final_detail4.UTF-8.txt"
 
-# ========== 后台导出CSV配置 ==========
+# ========== 本地CSV配置 ==========
 BACKEND_CSV_PATH = "skin_diagnosis_backend_data.csv"
+
+# ========== Google Sheets配置（关键：替换为你的信息） ==========
+GOOGLE_CREDENTIALS_FILE = "google_credentials.json"  # 下载的JSON密钥文件名
+GOOGLE_SHEET_NAME = "皮肤诊断数据"  # 你的Google表格名称
 
 # GitHub图片文件夹配置
 GITHUB_IMAGE_FOLDER = "experiment_pool"
@@ -33,6 +40,27 @@ DISEASE_LABELS = {
 }
 ALL_CLASSES = list(DISEASE_LABELS.values())
 TEST_COUNT = 10
+
+# === 初始化Google Sheets连接 ===
+def init_google_sheets():
+    """初始化Google Sheets连接，返回表格对象"""
+    try:
+        scope = [
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        # 加载凭证
+        creds = ServiceAccountCredentials.from_json_keyfile_name(
+            GOOGLE_CREDENTIALS_FILE, scope
+        )
+        client = gspread.authorize(creds)
+        # 打开表格
+        sheet = client.open(GOOGLE_SHEET_NAME).sheet1
+        return sheet
+    except Exception as e:
+        st.warning(f"⚠️ Google Sheets连接失败：{str(e)}")
+        st.warning("将仅保存到本地CSV文件，请检查凭证配置")
+        return None
 
 # === 会话状态初始化 ===
 def init_session_state():
@@ -55,13 +83,18 @@ def init_session_state():
         "question_start": 0,
         "time_baseline": 0,
         "doctor_id": "",
-        "ai_same_as_initial": False  # 新增：标记AI与初始诊断是否一致
+        "ai_same_as_initial": False,
+        "gs_sheet": None  # 存储Google Sheets连接对象
     }
     for key, value in default_states.items():
         if key not in st.session_state:
             st.session_state[key] = value
     
-    # 初始化后台CSV文件
+    # 初始化Google Sheets连接
+    if st.session_state.gs_sheet is None:
+        st.session_state.gs_sheet = init_google_sheets()
+    
+    # 初始化本地CSV文件
     if not os.path.exists(BACKEND_CSV_PATH):
         header = [
             "doctor_id", "hospital_level", "work_years", "daily_patients", "prior_ai_trust",
@@ -76,8 +109,8 @@ def init_session_state():
         ]
         pd.DataFrame(columns=header).to_csv(BACKEND_CSV_PATH, index=False, encoding="utf-8-sig")
 
-# === 数据加载（恢复稳定版本） ===
-@st.cache_data(ttl=300)  # 5分钟缓存过期，避免永久缓存失败状态
+# === 数据加载（稳定版本） ===
+@st.cache_data(ttl=300)
 def load_gold_data():
     try:
         response = requests.get(GOLD_TXT, timeout=15)
@@ -119,8 +152,10 @@ def load_balanced_test_set(df):
     test_set = pd.concat([correct_sample, incorrect_sample]).sample(frac=1).reset_index(drop=True)
     return test_set.head(TEST_COUNT)
 
-# === 辅助函数 ===
+# === 数据保存（本地CSV + Google Sheets同步） ===
 def save_result_to_backend(result):
+    """保存数据到本地CSV，并同步到Google Sheets"""
+    # 1. 保存到本地CSV
     try:
         pd.DataFrame([result]).to_csv(
             BACKEND_CSV_PATH,
@@ -130,8 +165,34 @@ def save_result_to_backend(result):
             encoding="utf-8-sig"
         )
     except Exception as e:
-        st.warning(f"后台数据保存失败：{str(e)}")
+        st.warning(f"本地CSV保存失败：{str(e)}")
+    
+    # 2. 同步到Google Sheets
+    if st.session_state.gs_sheet is not None:
+        try:
+            # 将字典转为列表（按表头顺序）
+            row_data = [
+                result["doctor_id"], result["hospital_level"], result["work_years"],
+                result["daily_patients"], result["prior_ai_trust"], result["image_id"],
+                result["true_label"], result["ai_label"], result["ai_is_correct"],
+                result["initial_top1"], result["initial_top2"], result["initial_top3"],
+                result["initial_confidence"], result["is_initial_top1_correct"],
+                result["is_initial_top3_correct"], result["interaction_type"],
+                result["action_taken"], result["use_ai"], result["final_top1"],
+                result["final_top2"], result["final_top3"], result["final_top4"],
+                result["is_final_top1_correct"], result["is_final_top3_correct"],
+                result["is_final_top4_correct"], result["final_confidence"],
+                result["confidence_gain"], result["decision_path"], result["is_misled"],
+                result["is_rescued"], result["time_baseline"], result["time_post_ai"],
+                result["submit_time"]
+            ]
+            # 追加到Google Sheets
+            st.session_state.gs_sheet.append_row(row_data)
+            st.success("✅ 数据已同步到Google Sheets")
+        except Exception as e:
+            st.warning(f"Google Sheets同步失败：{str(e)}")
 
+# === 重置答题状态（不重置test_set） ===
 def reset_test_state():
     st.session_state.show_ai = False
     st.session_state.initial_top = ["请选择", "无", "无"]
@@ -143,35 +204,20 @@ def reset_test_state():
     st.session_state.final_decision = ""
     st.session_state.final_conf = 5
     st.session_state.time_baseline = 0
-    st.session_state.ai_same_as_initial = False  # 重置AI一致标记
-    st.session_state.current_idx = 0
+    st.session_state.ai_same_as_initial = False
     st.session_state.user_results = []
-    st.session_state.test_set = None
 
-# === 图片加载（恢复稳定版本） ===
+# === 图片加载（稳定版本） ===
 def get_github_image_url(image_id):
-    # 兼容短ID和原始ID，优先匹配短ID
-    core_image_id = image_id
-    # 移除多余后缀（兼容旧图片名）
-    if '_' in core_image_id and '.jpg' in core_image_id:
-        core_image_id = core_image_id.split('_')[0]
-    
     possible_paths = [
-        # 优先匹配你的短ID文件夹
-        f"{GITHUB_IMAGE_FOLDER}/vitiligo/{core_image_id}.jpg",
-        f"{GITHUB_IMAGE_FOLDER}/vitiligo/{core_image_id}.png",
-        f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/{core_image_id}.jpg",
-        f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/{core_image_id}.png",
-        # 兼容其他文件夹
-        f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{core_image_id}.jpg",
-        f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{core_image_id}.png",
-        f"{GITHUB_IMAGE_FOLDER}/{core_image_id}.jpg",
-        f"{GITHUB_IMAGE_FOLDER}/{core_image_id}.png",
-        # 兼容原始完整ID（防止短ID匹配失败）
         f"{GITHUB_IMAGE_FOLDER}/vitiligo/{image_id}.jpg",
         f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/{image_id}.jpg",
         f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id}.jpg",
-        f"{GITHUB_IMAGE_FOLDER}/{image_id}.jpg"
+        f"{GITHUB_IMAGE_FOLDER}/{image_id}.jpg",
+        f"{GITHUB_IMAGE_FOLDER}/vitiligo/{image_id}.png",
+        f"{GITHUB_IMAGE_FOLDER}/pityrasis-alba-images/{image_id}.png",
+        f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id}.png",
+        f"{GITHUB_IMAGE_FOLDER}/{image_id}.png"
     ]
     
     for path in possible_paths:
@@ -237,7 +283,7 @@ def profile_step():
             except Exception as e:
                 st.error(f"测试数据加载失败：{str(e)}")
 
-# === 答题流程（核心逻辑修改） ===
+# === 答题流程 ===
 def test_step():
     if st.session_state.test_set is None:
         st.error("⚠️ 测试数据未加载，请返回重新开始")
@@ -249,6 +295,7 @@ def test_step():
     
     idx = st.session_state.current_idx
     test_set = st.session_state.test_set
+    
     if idx >= len(test_set):
         st.session_state.step = "result"
         st.rerun()
@@ -263,7 +310,6 @@ def test_step():
     st.progress((idx + 1) / TEST_COUNT, text=f"进度：{idx + 1}/{TEST_COUNT}")
     st.subheader("皮肤镜图像")
     
-    # 加载图片（恢复稳定逻辑）
     image_url = get_github_image_url(image_id)
     try:
         st.image(image_url, use_container_width=True, caption=f"图片ID：{image_id}")
@@ -282,18 +328,13 @@ def test_step():
         top3 = st.selectbox("备选 (Top-3) [可选]", top3_options, key=f"t3_{idx}", index=0)
         conf_init = st.slider("初始信心自评（1-10分）", 1, 10, 5, key=f"c1_{idx}")
         
-        # 验证Top1必填
         is_valid = top1 != "请选择"
         if not st.session_state.show_ai:
             if st.button("🔍 获取AI辅助建议", disabled=not is_valid):
-                # 记录初始诊断
                 st.session_state.initial_top = [top1, top2, top3]
                 st.session_state.initial_conf = conf_init
                 st.session_state.ai_suggestion = {"label": ai_label, "is_correct": ai_is_correct}
-                
-                # 判断AI与初始诊断是否一致
                 st.session_state.ai_same_as_initial = (top1 == ai_label)
-                
                 st.session_state.question_start = time.time()
                 st.session_state.time_baseline = round(time.time() - st.session_state.question_start, 2)
                 st.session_state.show_ai = True
@@ -307,18 +348,15 @@ def test_step():
             ai_sug = st.session_state.ai_suggestion["label"]
             initial_top1 = st.session_state.initial_top[0]
             
-            # 情况1：AI与初始诊断一致
             if st.session_state.ai_same_as_initial:
                 st.success(f"✅ 您的初始诊断（{initial_top1}）与AI建议（{ai_sug}）一致！无需额外选择")
                 
-                # 直接确认结果，无需用户选择
-                if st.button("✅ 确认结果并进入下一题"):
+                if st.button("✅ 确认结果并进入下一题", key=f"btn_{idx}"):
                     time_post_ai = round(time.time() - st.session_state.question_start, 2)
-                    confidence_gain = 0  # 无变化
+                    confidence_gain = 0
                     is_initial_top1_correct = (initial_top1 == true_label)
                     is_initial_top3_correct = (true_label in [t for t in st.session_state.initial_top if t != "无"])
                     
-                    # 最终结果与初始一致
                     final_top1 = initial_top1
                     final_top2 = st.session_state.initial_top[1]
                     final_top3 = st.session_state.initial_top[2]
@@ -326,16 +364,14 @@ def test_step():
                     is_final_top1_correct = is_initial_top1_correct
                     is_final_top3_correct = is_initial_top3_correct
                     is_final_top4_correct = (true_label in [final_top1, final_top2, final_top3])
-                    use_ai = 0  # 未使用AI（因为一致）
+                    use_ai = 0
                     
-                    # 决策路径
                     initial_correct = is_initial_top1_correct
                     final_correct = is_final_top1_correct
                     decision_path = "一致"
                     is_misled = False
                     is_rescued = False
                     
-                    # 构造结果数据
                     result = {
                         "doctor_id": st.session_state.doctor_id,
                         "hospital_level": st.session_state.doctor_info["hospital_level"],
@@ -372,16 +408,13 @@ def test_step():
                         "submit_time": time.strftime("%Y-%m-%d %H:%M:%S")
                     }
                     
-                    # 保存结果
                     st.session_state.user_results.append(result)
                     save_result_to_backend(result)
                     
-                    # 重置状态
                     reset_test_state()
-                    st.session_state.current_idx += 1
+                    st.session_state.current_idx = idx + 1
                     st.rerun()
             
-            # 情况2：AI与初始诊断不一致
             else:
                 st.warning(f"⚠️ 您的初始诊断（{initial_top1}）与AI建议（{ai_sug}）不一致！请选择处理方式")
                 interaction_type = "冲突"
@@ -389,18 +422,17 @@ def test_step():
                 st.markdown("#### 交互动作选择")
                 action = st.radio(
                     "您希望如何处理AI建议？",
-                    ["坚持原诊断", "替换为AI建议"],  # 简化选项，仅保留核心选择
+                    ["坚持原诊断", "替换为AI建议"],
                     key=f"act_{idx}"
                 )
                 
-                # 根据选择确定最终结果
                 final_top1 = initial_top1 if action == "坚持原诊断" else ai_sug
                 final_top2 = st.session_state.initial_top[1]
                 final_top3 = st.session_state.initial_top[2]
                 final_top4 = "无"
                 conf_final = st.slider("最终信心自评（1-10分）", 1, 10, st.session_state.initial_conf, key=f"c2_{idx}")
                 
-                if st.button("✅ 确认结果并进入下一题"):
+                if st.button("✅ 确认结果并进入下一题", key=f"btn_{idx}"):
                     time_post_ai = round(time.time() - st.session_state.question_start, 2)
                     confidence_gain = conf_final - st.session_state.initial_conf
                     is_initial_top1_correct = (initial_top1 == true_label)
@@ -412,7 +444,6 @@ def test_step():
                     is_final_top4_correct = (true_label in final_options)
                     use_ai = 1 if action == "替换为AI建议" else 0
                     
-                    # 决策路径
                     initial_correct = is_initial_top1_correct
                     final_correct = is_final_top1_correct
                     decision_path = ""
@@ -429,7 +460,6 @@ def test_step():
                     else:
                         decision_path = "盲从"
                     
-                    # 构造结果数据
                     result = {
                         "doctor_id": st.session_state.doctor_id,
                         "hospital_level": st.session_state.doctor_info["hospital_level"],
@@ -466,20 +496,18 @@ def test_step():
                         "submit_time": time.strftime("%Y-%m-%d %H:%M:%S")
                     }
                     
-                    # 保存结果
                     st.session_state.user_results.append(result)
                     save_result_to_backend(result)
                     
-                    # 重置状态
                     reset_test_state()
-                    st.session_state.current_idx += 1
+                    st.session_state.current_idx = idx + 1
                     st.rerun()
 
-# === 结果展示 ===
+# === 结果展示 + 数据下载 ===
 def result_step():
     st.title("🏁 测试完成！研究数据可视化报告")
     st.success(f"✅ 您的测试已完成！您的唯一标识ID：{st.session_state.doctor_id}")
-    st.info("📌 所有数据均匿名存储")
+    st.info("📌 所有数据均匿名存储，已同步到Google Sheets")
     
     results = st.session_state.user_results
     if not results:
@@ -563,6 +591,29 @@ def result_step():
     ax.set_xlabel("初始信任度（1-5分）")
     ax.set_ylabel("AI采纳率")
     st.pyplot(fig)
+
+    # 新增：数据下载功能
+    st.subheader("📥 数据导出")
+    col1, col2 = st.columns(2)
+    with col1:
+        # 导出本地CSV
+        with open(BACKEND_CSV_PATH, "r", encoding="utf-8-sig") as f:
+            csv_data = f.read()
+        st.download_button(
+            label="下载本地完整数据（CSV）",
+            data=csv_data,
+            file_name=f"skin_diagnosis_local_{time.strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv"
+        )
+    with col2:
+        # 导出当前用户数据
+        user_csv = df.to_csv(index=False, encoding="utf-8-sig")
+        st.download_button(
+            label="下载本次答题数据（CSV）",
+            data=user_csv,
+            file_name=f"skin_diagnosis_user_{st.session_state.doctor_id}_{time.strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv"
+        )
     
     if st.button("🔄 重新开始测试"):
         init_session_state()
@@ -570,6 +621,14 @@ def result_step():
 
 # === 主函数 ===
 def main():
+    # 安装依赖提示（首次运行）
+    try:
+        import gspread
+        import oauth2client
+    except ImportError:
+        st.error("⚠️ 缺少Google Sheets依赖库，请先运行：pip install gspread oauth2client")
+        st.stop()
+    
     init_session_state()
     if st.session_state.step == "profile":
         profile_step()
