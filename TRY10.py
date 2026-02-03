@@ -22,7 +22,6 @@ st.set_page_config(page_title="皮肤病AI辅助诊断研究", page_icon="🩺",
 # 性能优化配置
 REQUEST_TIMEOUT = 1  # 图片请求超时1秒
 CACHE_TTL = 3600     # 缓存有效期1小时
-AUTO_SAVE_INTERVAL = 3  # 每3题自动保存一次
 IMAGE_COMPRESS_WIDTH = 600  # 手机端更适合的图片宽度
 IMAGE_QUALITY = 85     # 图片压缩质量（1-100）
 
@@ -98,15 +97,13 @@ def init_google_sheets_once():
         st.error(f"⚠️ Google Sheets初始化失败：{str(e)}")
         return None
 
-# === 会话状态初始化（修复saved_count未初始化问题） ===
+# === 会话状态初始化 ===
 def init_session_state():
-    # 确保所有会话状态变量都被初始化
     default_states = {
         "step": "profile",
         "current_idx": 0,
         "show_ai": False,
         "user_results": [],  # 本地临时存储
-        "saved_count": 0,    # 新增：初始化saved_count为0
         "test_set": None,
         "doctor_info": {},
         "ai_suggestion": {},
@@ -163,19 +160,14 @@ def load_balanced_test_set(df):
     test_set = pd.concat([correct_sample, incorrect_sample]).sample(frac=1).reset_index(drop=True)
     return test_set.head(TEST_COUNT)
 
-# === 自动保存函数（异步，不阻塞） ===
-def auto_save_results():
+# === 最终批量保存（移除自动保存） ===
+def save_results_batch():
     if st.session_state.gs_sheet is None or len(st.session_state.user_results) == 0:
-        return
-    
-    # 只保存未保存的部分（修复saved_count的使用）
-    unsaved = st.session_state.user_results[st.session_state.saved_count:]
-    if len(unsaved) == 0:
         return
     
     try:
         rows = []
-        for result in unsaved:
+        for result in st.session_state.user_results:
             row_data = [
                 result["doctor_id"], result["hospital_level"], result["work_years"],
                 result["daily_patients"], result["prior_ai_trust"], result["image_id"],
@@ -193,34 +185,11 @@ def auto_save_results():
             ]
             rows.append(row_data)
         
-        # 异步写入
-        with st.spinner("💾 自动保存中..."):
+        with st.spinner("💾 正在保存所有数据..."):
             st.session_state.gs_sheet.append_rows(rows)
-        st.session_state.saved_count = len(st.session_state.user_results)
-        st.toast(f"✅ 自动保存{len(unsaved)}条数据", icon="💾")
+        st.toast(f"✅ 成功保存{len(rows)}条数据到Google Sheets", icon="✅")
     except Exception as e:
-        st.toast(f"⚠️ 自动保存失败：{str(e)[:20]}", icon="⚠️")
-
-# === 最终批量保存 + 校验 ===
-def save_results_batch():
-    if st.session_state.gs_sheet is None or len(st.session_state.user_results) == 0:
-        return
-    
-    # 先自动保存剩余数据
-    auto_save_results()
-    
-    # 校验总数
-    try:
-        all_data = st.session_state.gs_sheet.get_all_records()
-        df = pd.DataFrame(all_data)
-        user_data = df[df["doctor_id"] == st.session_state.doctor_id]
-        if len(user_data) != len(st.session_state.user_results):
-            st.warning(f"⚠️ 数据校验：本地{len(st.session_state.user_results)}条，表格{len(user_data)}条")
-            # 重新全量写入（去重）
-            st.session_state.gs_sheet.append_rows([list(r.values()) for r in st.session_state.user_results])
-        st.toast(f"✅ 最终保存完成，共{len(st.session_state.user_results)}条", icon="✅")
-    except Exception as e:
-        st.error(f"❌ 最终保存失败：{str(e)}")
+        st.error(f"❌ 数据保存失败：{str(e)}")
 
 # === 重置答题状态 ===
 def reset_test_state():
@@ -238,25 +207,21 @@ def reset_test_state():
 # === 图片压缩函数 ===
 def compress_image(image_url):
     try:
-        # 下载原图
         response = requests.get(image_url, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         img = Image.open(BytesIO(response.content))
         
-        # 等比缩放（适配手机）
         w, h = img.size
         ratio = IMAGE_COMPRESS_WIDTH / w
         new_height = int(h * ratio)
         img = img.resize((IMAGE_COMPRESS_WIDTH, new_height), Image.Resampling.LANCZOS)
         
-        # 压缩并保存到内存
         buf = BytesIO()
         img.save(buf, format="JPEG", quality=IMAGE_QUALITY, optimize=True)
         buf.seek(0)
         return buf
     except Exception as e:
         st.toast(f"⚠️ 图片压缩失败：{str(e)[:20]}", icon="⚠️")
-        # 返回原图
         response = requests.get(image_url, timeout=REQUEST_TIMEOUT)
         return BytesIO(response.content)
 
@@ -266,7 +231,6 @@ def get_image_url_cached(image_id):
     possible_paths = []
     image_id_clean = re.sub(r'\.(jpg|png)$', '', image_id)
     
-    # 只尝试3个核心路径
     if 'pityriasis-alba' in image_id_clean.lower() or 'pityrasis-alba' in image_id_clean.lower():
         possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityriasis-alba-images/{image_id_clean}.jpg")
     elif 'psoriasis' in image_id_clean.lower():
@@ -278,7 +242,6 @@ def get_image_url_cached(image_id):
     else:
         possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{image_id_clean}.jpg")
 
-    # 尝试加载
     for path in possible_paths[:3]:
         raw_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{path}"
         try:
@@ -288,7 +251,6 @@ def get_image_url_cached(image_id):
         except:
             continue
 
-    # 备用图
     isic_fallback = ["ISIC_0034334", "ISIC_0034402", "ISIC_0034411"]
     return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{GITHUB_IMAGE_FOLDER}/{random.choice(isic_fallback)}.jpg"
 
@@ -298,7 +260,6 @@ def profile_step():
     st.subheader("第一步：医生信息采集（匿名）")
     
     with st.form("profile_form", clear_on_submit=True):
-        # 手机端更紧凑的布局
         hospital_level = st.selectbox(
             "1. 医院等级", 
             ["三甲医院专科医生", "二级医院专科医生", "社区医院医生（含实习生）"]
@@ -316,7 +277,6 @@ def profile_step():
             1, 5, 3, help="1=极不信任，5=极度信任"
         )
         
-        # 手机端更醒目的按钮
         if st.form_submit_button("✅ 提交并开始测试", type="primary"):
             level_prefix = {"三甲医院专科医生":"A", "二级医院专科医生":"B", "社区医院医生":"C"}[hospital_level]
             st.session_state.doctor_id = f"{level_prefix}_DR_{uuid.uuid4().hex[:6].upper()}"
@@ -350,9 +310,8 @@ def test_step():
     idx = st.session_state.current_idx
     test_set = st.session_state.test_set
     
-    # 检查是否完成所有题
     if idx >= len(test_set):
-        save_results_batch()  # 最终保存+校验
+        save_results_batch()  # 完成后一次性保存
         st.session_state.step = "result"
         st.rerun()
     
@@ -362,12 +321,10 @@ def test_step():
     ai_label = current_data["ai_cn"]
     ai_is_correct = (ai_label == true_label)
     
-    # 手机端更简洁的标题
     st.title(f"📝 测试题 {idx + 1}/{TEST_COUNT}")
     st.progress((idx + 1) / TEST_COUNT, text=f"进度：{idx + 1}/{TEST_COUNT}")
     st.subheader("皮肤镜图像")
     
-    # 加载并压缩图片（适配手机）
     image_url = get_image_url_cached(image_id)
     compressed_img = compress_image(image_url)
     try:
@@ -375,7 +332,6 @@ def test_step():
     except:
         st.image("https://via.placeholder.com/600x400?text=皮肤镜示例图", use_container_width=True)
     
-    # 手机端使用单列布局（避免双列拥挤）
     st.markdown("### 第一阶段：独立诊断")
     top1 = st.selectbox("首选 (Top-1) [必填]", ["请选择"] + ALL_CLASSES, key=f"t1_{idx}")
     top2_options = ["无"] + [c for c in ALL_CLASSES if c != top1]
@@ -447,11 +403,6 @@ def test_step():
                 }
                 
                 st.session_state.user_results.append(result)
-                
-                # 每3题自动保存
-                if (idx + 1) % AUTO_SAVE_INTERVAL == 0:
-                    auto_save_results()
-                
                 reset_test_state()
                 st.session_state.current_idx = idx + 1
                 st.rerun()
@@ -470,12 +421,10 @@ def test_step():
             if st.button("✅ 确认并进入下一题", key=f"btn_{idx}", type="primary"):
                 time_post_ai = round(time.time() - st.session_state.question_start, 2)
                 confidence_gain = conf_final - st.session_state.initial_conf
-                # 修复变量未定义的问题：使用is_initial_top1_correct替代initial_correct
                 is_initial_top1_correct = (initial_top1 == true_label)
                 is_final_top1_correct = (final_top1 == true_label)
                 use_ai = 1 if action == "替换为AI建议" else 0
                 
-                # 决策路径逻辑（修复变量问题）
                 decision_path = ""
                 is_misled = False
                 is_rescued = False
@@ -527,11 +476,6 @@ def test_step():
                 }
                 
                 st.session_state.user_results.append(result)
-                
-                # 每3题自动保存
-                if (idx + 1) % AUTO_SAVE_INTERVAL == 0:
-                    auto_save_results()
-                
                 reset_test_state()
                 st.session_state.current_idx = idx + 1
                 st.rerun()
@@ -572,7 +516,6 @@ def main():
         st.error("⚠️ 缺少依赖库，请运行：pip install gspread oauth2client pillow")
         st.stop()
     
-    # 确保会话状态初始化
     if "step" not in st.session_state:
         init_session_state()
     
