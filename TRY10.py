@@ -17,7 +17,6 @@ from io import BytesIO
 
 # === 核心配置 ===
 st.set_option('client.showErrorDetails', True)  
-# 适配手机屏幕：使用"centered"布局（更适合移动设备）
 st.set_page_config(page_title="皮肤病AI辅助诊断研究", page_icon="🩺", layout="centered")
 
 # 性能优化配置
@@ -75,35 +74,39 @@ def init_google_sheets_once():
             creds = ServiceAccountCredentials.from_json_keyfile_name(LOCAL_GOOGLE_CREDENTIALS_FILE, scope)
         
         client = gspread.authorize(creds)
-        sheet = client.open(GOOGLE_SHEET_NAME).sheet1
-        
-        # 初始化表头（仅一次）
-        headers = sheet.row_values(1)
-        required_headers = [
-            "doctor_id", "hospital_level", "work_years", "daily_patients", "prior_ai_trust",
-            "image_id", "true_label", "ai_label", "ai_is_correct", "initial_top1", "initial_top2",
-            "initial_top3", "initial_confidence", "is_initial_top1_correct", "is_initial_top3_correct",
-            "interaction_type", "action_taken", "use_ai", "final_top1", "final_top2", "final_top3",
-            "final_top4", "is_final_top1_correct", "is_final_top3_correct", "is_final_top4_correct",
-            "final_confidence", "confidence_gain", "decision_path", "is_misled", "is_rescued",
-            "time_baseline", "time_post_ai", "submit_time"
-        ]
-        if not headers or len(headers) != len(required_headers):
-            sheet.clear()
-            sheet.append_row(required_headers)
-        return sheet
+        try:
+            sheet = client.open(GOOGLE_SHEET_NAME).sheet1
+            # 初始化表头（仅一次）
+            headers = sheet.row_values(1)
+            required_headers = [
+                "doctor_id", "hospital_level", "work_years", "daily_patients", "prior_ai_trust",
+                "image_id", "true_label", "ai_label", "ai_is_correct", "initial_top1", "initial_top2",
+                "initial_top3", "initial_confidence", "is_initial_top1_correct", "is_initial_top3_correct",
+                "interaction_type", "action_taken", "use_ai", "final_top1", "final_top2", "final_top3",
+                "final_top4", "is_final_top1_correct", "is_final_top3_correct", "is_final_top4_correct",
+                "final_confidence", "confidence_gain", "decision_path", "is_misled", "is_rescued",
+                "time_baseline", "time_post_ai", "submit_time"
+            ]
+            if not headers or len(headers) != len(required_headers):
+                sheet.clear()
+                sheet.append_row(required_headers)
+            return sheet
+        except gspread.exceptions.SpreadsheetNotFound:
+            st.error(f"❌ 未找到Google表格：{GOOGLE_SHEET_NAME}")
+            return None
     except Exception as e:
         st.error(f"⚠️ Google Sheets初始化失败：{str(e)}")
         return None
 
-# === 会话状态初始化 ===
+# === 会话状态初始化（修复saved_count未初始化问题） ===
 def init_session_state():
+    # 确保所有会话状态变量都被初始化
     default_states = {
         "step": "profile",
         "current_idx": 0,
         "show_ai": False,
         "user_results": [],  # 本地临时存储
-        "saved_count": 0,    # 记录已保存的题数
+        "saved_count": 0,    # 新增：初始化saved_count为0
         "test_set": None,
         "doctor_info": {},
         "ai_suggestion": {},
@@ -165,7 +168,7 @@ def auto_save_results():
     if st.session_state.gs_sheet is None or len(st.session_state.user_results) == 0:
         return
     
-    # 只保存未保存的部分
+    # 只保存未保存的部分（修复saved_count的使用）
     unsaved = st.session_state.user_results[st.session_state.saved_count:]
     if len(unsaved) == 0:
         return
@@ -569,6 +572,7 @@ def main():
         st.error("⚠️ 缺少依赖库，请运行：pip install gspread oauth2client pillow")
         st.stop()
     
+    # 确保会话状态初始化
     if "step" not in st.session_state:
         init_session_state()
     
