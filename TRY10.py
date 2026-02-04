@@ -11,10 +11,16 @@ from oauth2client.service_account import ServiceAccountCredentials
 import re
 import random
 from io import BytesIO
+import matplotlib.pyplot as plt
+import numpy as np
 
 # === 核心配置 ===
 st.set_option('client.showErrorDetails', True)
 st.set_page_config(page_title="皮肤病AI辅助诊断研究", page_icon="🩺", layout="centered")
+
+# 中文显示配置
+plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']  # 兼容中英文
+plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
 # 性能优化配置
 REQUEST_TIMEOUT = 1
@@ -285,7 +291,7 @@ def profile_step():
             st.session_state.step = "test"
             st.rerun()
 
-# === 测试答题页 ===
+# === 测试答题页（隐藏图片ID）===
 def test_step():
     ts = st.session_state.test_set
     if ts is None or ts.empty:
@@ -307,7 +313,8 @@ def test_step():
     st.subheader("皮损图像")
     img_url = get_image_url_cached(img_id)
     cpr = compress_image(img_url)
-    st.image(cpr, use_container_width=True, caption=f"ID: {img_id}")
+    # 移除图片ID显示，避免干扰做题
+    st.image(cpr, use_container_width=True)
 
     st.markdown("### 一、独立诊断")
     t1 = st.selectbox("首选 Top1", ["请选择"] + ALL_CLASSES, key=f"t1_{idx}")
@@ -400,12 +407,87 @@ def test_step():
             st.session_state.current_idx += 1
             st.rerun()
 
-# === 结果页 ===
+# === 结果页（添加两个核心柱状图）===
 def result_step():
     st.title("🏁 测试完成")
-    st.success(f"ID：{st.session_state.doctor_id}")
-    st.info("所有数据已写入 Google Sheets，可前往表格查看")
-    if st.button("🔄 重新测试"):
+    st.success(f"你的测试ID：{st.session_state.doctor_id}")
+    st.info("所有数据已成功写入 Google Sheets，可前往表格查看完整记录")
+
+    # 数据预处理
+    if len(st.session_state.user_results) > 0:
+        df = pd.DataFrame(st.session_state.user_results)
+        
+        # 1. 诊断准确率对比柱状图
+        st.subheader("📊 诊断准确率对比")
+        initial_acc = df["is_initial_top1_correct"].mean() * 100
+        final_acc = df["is_final_top1_correct"].mean() * 100
+        
+        fig1, ax1 = plt.subplots(figsize=(8, 5))
+        categories = ["初始诊断（无AI）", "最终诊断（AI辅助）"]
+        accuracies = [initial_acc, final_acc]
+        colors = ["#3498db", "#2ecc71"]
+        
+        bars1 = ax1.bar(categories, accuracies, color=colors, width=0.6)
+        ax1.set_ylim(0, 100)
+        ax1.set_ylabel("准确率（%）")
+        ax1.set_title("AI辅助前后诊断准确率对比", fontsize=12, fontweight="bold")
+        
+        # 添加数值标签
+        for bar, acc in zip(bars1, accuracies):
+            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
+                    f"{acc:.1f}%", ha="center", va="bottom", fontsize=11)
+        
+        # 添加网格线
+        ax1.yaxis.grid(True, linestyle="--", alpha=0.7)
+        ax1.set_axisbelow(True)
+        st.pyplot(fig1)
+
+        # 2. AI采纳效果柱状图
+        st.subheader("📊 AI采纳效果分析")
+        # 筛选采纳/未采纳AI的记录
+        ai_used = df[df["use_ai"] == 1]
+        ai_not_used = df[df["use_ai"] == 0]
+        
+        # 计算准确率
+        ai_used_acc = ai_used["is_final_top1_correct"].mean() * 100 if len(ai_used) > 0 else 0
+        ai_not_used_acc = ai_not_used["is_final_top1_correct"].mean() * 100 if len(ai_not_used) > 0 else 0
+        
+        fig2, ax2 = plt.subplots(figsize=(8, 5))
+        categories2 = ["采纳AI建议", "未采纳AI建议"]
+        accuracies2 = [ai_used_acc, ai_not_used_acc]
+        colors2 = ["#e74c3c", "#f39c12"]
+        
+        bars2 = ax2.bar(categories2, accuracies2, color=colors2, width=0.6)
+        ax2.set_ylim(0, 100)
+        ax2.set_ylabel("诊断准确率（%）")
+        ax2.set_title("AI建议采纳与否的诊断准确率对比", fontsize=12, fontweight="bold")
+        
+        # 添加数值标签
+        for bar, acc in zip(bars2, accuracies2):
+            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
+                    f"{acc:.1f}%", ha="center", va="bottom", fontsize=11)
+        
+        # 添加样本数标注
+        ax2.text(0, 5, f"样本数：{len(ai_used)}题", ha="center", fontsize=10, color="gray")
+        ax2.text(1, 5, f"样本数：{len(ai_not_used)}题", ha="center", fontsize=10, color="gray")
+        
+        # 添加网格线
+        ax2.yaxis.grid(True, linestyle="--", alpha=0.7)
+        ax2.set_axisbelow(True)
+        st.pyplot(fig2)
+
+        # 关键指标汇总
+        st.subheader("📈 核心指标汇总")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("初始准确率", f"{initial_acc:.1f}%")
+        with col2:
+            st.metric("最终准确率", f"{final_acc:.1f}%", delta=f"{final_acc-initial_acc:.1f}%")
+        with col3:
+            st.metric("采纳AI次数", len(ai_used))
+
+    # 重新测试按钮
+    if st.button("🔄 重新开始测试", type="primary"):
         init_session_state()
         st.rerun()
 
