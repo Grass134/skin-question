@@ -3,42 +3,39 @@ import pandas as pd
 import os
 import uuid
 import time
-import matplotlib.pyplot as plt
-import numpy as np
 from PIL import Image
 import requests
 import io
-import json  
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import re  
+import re
 import random
 from io import BytesIO
 
 # === 核心配置 ===
-st.set_option('client.showErrorDetails', True)  
+st.set_option('client.showErrorDetails', True)
 st.set_page_config(page_title="皮肤病AI辅助诊断研究", page_icon="🩺", layout="centered")
 
 # 性能优化配置
-REQUEST_TIMEOUT = 1  # 图片请求超时1秒
-CACHE_TTL = 3600     # 缓存有效期1小时
-IMAGE_COMPRESS_WIDTH = 600  # 手机端更适合的图片宽度
-IMAGE_QUALITY = 85     # 图片压缩质量（1-100）
+REQUEST_TIMEOUT = 1
+CACHE_TTL = 3600
+IMAGE_COMPRESS_WIDTH = 600
+IMAGE_QUALITY = 85
 
-# 你的GitHub信息
+# GitHub 配置
 GITHUB_USERNAME = "Grass134"
 GITHUB_REPO = "skin-question"
 GOLD_TXT = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/main/boosted_final_detail4.UTF-8.txt"
 
-# ========== Google Sheets配置 ==========
-GOOGLE_SHEET_NAME = "皮肤诊断数据"  
+# ========== Google Sheets 强制开启配置 ==========
+GOOGLE_SHEET_NAME = "皮肤诊断数据"
 LOCAL_GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
 
-# GitHub图片文件夹配置
+# GitHub 图片路径
 GITHUB_IMAGE_FOLDER = "experiment_pool"
 GITHUB_BRANCH = "main"
 
-# 疾病标签映射
+# 疾病标签
 DISEASE_LABELS = {
     "MEL": "黑色素瘤", "NV": "痣（色素痣）", "BCC": "基底细胞癌", "AK": "光化性角化病",
     "BKL": "良性角化病（脂溢性角化等）", "DF": "皮肤纤维瘤", "VASC": "血管病变", "SCC": "鳞状细胞癌",
@@ -47,172 +44,156 @@ DISEASE_LABELS = {
 ALL_CLASSES = list(DISEASE_LABELS.values())
 TEST_COUNT = 10
 
-# === 性能优化：全局缓存Google Sheets连接（延迟初始化） ===
+# === Google Sheets 初始化（强制返回 (sheet, error) 二元组）===
 @st.cache_resource(ttl=CACHE_TTL, show_spinner=False)
 def init_google_sheets_once():
     try:
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        
-        # 优先从Streamlit Secrets读取
+        scope = [
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive"
+        ]
+
+        # 优先读取 Streamlit Secrets
         try:
             creds_dict = dict(st.secrets["GOOGLE_CREDENTIALS"])
             if "private_key" in creds_dict:
                 creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-            
-            required_fields = ["type", "project_id", "private_key", "client_email"]
-            missing_fields = [f for f in required_fields if f not in creds_dict]
-            if missing_fields:
-                return None, f"❌ 密钥缺少必要字段：{missing_fields}"
-            
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         except KeyError:
             if not os.path.exists(LOCAL_GOOGLE_CREDENTIALS_FILE):
-                return None, "❌ 本地凭证文件不存在"
+                return None, "❌ 未找到本地凭证文件 google_credentials.json"
             creds = ServiceAccountCredentials.from_json_keyfile_name(LOCAL_GOOGLE_CREDENTIALS_FILE, scope)
-        
-        client = gspread.authorize(creds)
-        try:
-            sheet = client.open(GOOGLE_SHEET_NAME).sheet1
-            # 初始化表头（仅一次）
-            headers = sheet.row_values(1)
-            required_headers = [
-                "doctor_id", "hospital_level", "work_years", "daily_patients", "prior_ai_trust",
-                "image_id", "true_label", "ai_label", "ai_is_correct", "initial_top1", "initial_top2",
-                "initial_top3", "initial_confidence", "is_initial_top1_correct", "is_initial_top3_correct",
-                "interaction_type", "action_taken", "use_ai", "final_top1", "final_top2", "final_top3",
-                "final_top4", "is_final_top1_correct", "is_final_top3_correct", "is_final_top4_correct",
-                "final_confidence", "confidence_gain", "decision_path", "is_misled", "is_rescued",
-                "time_baseline", "time_post_ai", "submit_time"
-            ]
-            if not headers or len(headers) != len(required_headers):
-                sheet.clear()
-                sheet.append_row(required_headers)
-            return sheet, None
-        except gspread.exceptions.SpreadsheetNotFound:
-            return None, f"❌ 未找到Google表格：{GOOGLE_SHEET_NAME}"
-    except Exception as e:
-        return None, f"⚠️ Google Sheets初始化失败：{str(e)}"
 
-# === 会话状态初始化（延迟加载Google Sheets） ===
+        client = gspread.authorize(creds)
+        sheet = client.open(GOOGLE_SHEET_NAME).sheet1
+
+        # 表头校验
+        required_headers = [
+            "doctor_id", "hospital_level", "work_years", "daily_patients", "prior_ai_trust",
+            "image_id", "true_label", "ai_label", "ai_is_correct", "initial_top1", "initial_top2",
+            "initial_top3", "initial_confidence", "is_initial_top1_correct", "is_initial_top3_correct",
+            "interaction_type", "action_taken", "use_ai", "final_top1", "final_top2", "final_top3",
+            "final_top4", "is_final_top1_correct", "is_final_top3_correct", "is_final_top4_correct",
+            "final_confidence", "confidence_gain", "decision_path", "is_misled", "is_rescued",
+            "time_baseline", "time_post_ai", "submit_time"
+        ]
+        headers = sheet.row_values(1)
+        if not headers or len(headers) != len(required_headers):
+            sheet.clear()
+            sheet.append_row(required_headers)
+
+        return sheet, None
+
+    except gspread.exceptions.SpreadsheetNotFound:
+        return None, f"❌ 未找到表格：{GOOGLE_SHEET_NAME}"
+    except Exception as e:
+        return None, f"❌ Google Sheets 初始化失败：{str(e)}"
+
+# === 会话状态初始化 ===
 def init_session_state():
     default_states = {
         "step": "profile",
         "current_idx": 0,
         "show_ai": False,
-        "user_results": [],  # 本地临时存储
+        "user_results": [],
         "test_set": None,
         "doctor_info": {},
         "ai_suggestion": {},
         "initial_top": ["请选择", "无", "无"],
         "initial_conf": 5,
-        "final_top1": "",
-        "final_top2": "",
-        "final_top3": "",
-        "final_top4": "",
+        "final_top1": "", "final_top2": "", "final_top3": "", "final_top4": "",
         "final_conf": 5,
         "question_start": 0,
         "time_baseline": 0,
         "doctor_id": "",
         "ai_same_as_initial": False,
-        "gs_sheet": None,  # 延迟初始化
-        "gs_error": None
     }
-    for key, value in default_states.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+    for k, v in default_states.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
-# === 性能优化：缓存测试数据（避免st.stop阻塞） ===
+# === 测试集加载缓存 ===
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def load_gold_data_cached():
     try:
-        response = requests.get(GOLD_TXT, timeout=5)
-        response.raise_for_status()
-        df = pd.read_csv(io.StringIO(response.text), encoding="utf-8")
-        
-        required_cols = ["image_id", "Top1_预测", "真实病名"]
-        missing_cols = [col for col in required_cols if col not in df.columns]
-        if missing_cols:
-            return None, f"⚠️ 缺失必要字段：{', '.join(missing_cols)}"
-        
+        resp = requests.get(GOLD_TXT, timeout=8)
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text), encoding="utf-8")
+        req_cols = ["image_id", "Top1_预测", "真实病名"]
+        missing = [c for c in req_cols if c not in df.columns]
+        if missing:
+            return None, f"缺失字段：{missing}"
+
         df["true_cn"] = df["真实病名"].map(DISEASE_LABELS).fillna("未知")
         df["ai_cn"] = df["Top1_预测"].map(DISEASE_LABELS).fillna("未知")
         df["ai_correct"] = df["true_cn"] == df["ai_cn"]
-        df = df[df["true_cn"] != "未知"]
-        df = df[df["ai_cn"] != "未知"]
+        df = df[(df["true_cn"] != "未知") & (df["ai_cn"] != "未知")]
         return df, None
     except Exception as e:
-        return None, f"⚠️ 测试数据加载失败：{str(e)}"
+        return None, f"加载失败：{str(e)}"
 
-# === 修复UnboundLocalError：确保所有变量都有初始值 ===
+# === 均衡采样（修复 UnboundLocalError）===
 def load_balanced_test_set(df):
-    # 初始化空DataFrame作为兜底
     correct_sample = pd.DataFrame()
     incorrect_sample = pd.DataFrame()
-    
-    # 分离正确/错误样本
     ai_correct = df[df["ai_correct"]]
     ai_incorrect = df[~df["ai_correct"]]
-    
-    # 采样（添加空值判断）
+
     if len(ai_correct) > 0:
-        correct_sample = ai_correct.sample(min(6, len(ai_correct)))
-        # 补充样本到6个（如果有足够数据）
-        if len(correct_sample) < 6:
-            need = 6 - len(correct_sample)
-            add_sample = ai_correct.sample(need) if len(ai_correct) >= need else ai_correct
-            correct_sample = pd.concat([correct_sample, add_sample])
-    
+        correct_sample = ai_correct.sample(min(6, len(ai_correct)), replace=False)
+        need = max(0, 6 - len(correct_sample))
+        if need > 0 and len(ai_correct) >= need:
+            correct_sample = pd.concat([correct_sample, ai_correct.sample(need, replace=False)])
+
     if len(ai_incorrect) > 0:
-        incorrect_sample = ai_incorrect.sample(min(4, len(ai_incorrect)))
-        # 补充样本到4个（如果有足够数据）
-        if len(incorrect_sample) < 4:
-            need = 4 - len(incorrect_sample)
-            add_sample = ai_incorrect.sample(need) if len(ai_incorrect) >= need else ai_incorrect
-            incorrect_sample = pd.concat([incorrect_sample, add_sample])
-    
-    # 处理所有样本都为空的极端情况
-    if len(correct_sample) == 0 and len(incorrect_sample) == 0:
+        incorrect_sample = ai_incorrect.sample(min(4, len(ai_incorrect)), replace=False)
+        need = max(0, 4 - len(incorrect_sample))
+        if need > 0 and len(ai_incorrect) >= need:
+            incorrect_sample = pd.concat([incorrect_sample, ai_incorrect.sample(need, replace=False)])
+
+    if correct_sample.empty and incorrect_sample.empty:
         return df.head(TEST_COUNT)
-    
-    # 合并并打乱顺序
+
     test_set = pd.concat([correct_sample, incorrect_sample]).sample(frac=1).reset_index(drop=True)
     return test_set.head(TEST_COUNT)
 
-# === 最终批量保存（移除自动保存） ===
-def save_results_batch():
-    if st.session_state.gs_sheet is None:
-        st.error(st.session_state.gs_error)
-        return
-    if len(st.session_state.user_results) == 0:
-        return
-    
-    try:
-        rows = []
-        for result in st.session_state.user_results:
-            row_data = [
-                result["doctor_id"], result["hospital_level"], result["work_years"],
-                result["daily_patients"], result["prior_ai_trust"], result["image_id"],
-                result["true_label"], result["ai_label"], result["ai_is_correct"],
-                result["initial_top1"], result["initial_top2"], result["initial_top3"],
-                result["initial_confidence"], result["is_initial_top1_correct"],
-                result["is_initial_top3_correct"], result["interaction_type"],
-                result["action_taken"], result["use_ai"], result["final_top1"],
-                result["final_top2"], result["final_top3"], result["final_top4"],
-                result["is_final_top1_correct"], result["is_final_top3_correct"],
-                result["is_final_top4_correct"], result["final_confidence"],
-                result["confidence_gain"], result["decision_path"], result["is_misled"],
-                result["is_rescued"], result["time_baseline"], result["time_post_ai"],
-                result["submit_time"]
-            ]
-            rows.append(row_data)
-        
-        with st.spinner("💾 正在保存所有数据..."):
-            st.session_state.gs_sheet.append_rows(rows)
-        st.toast(f"✅ 成功保存{len(rows)}条数据到Google Sheets", icon="✅")
-    except Exception as e:
-        st.error(f"❌ 数据保存失败：{str(e)}")
+# === 强制保存到 Google Sheets（无备选逻辑）===
+def save_results_to_gs():
+    with st.spinner("正在保存数据到 Google Sheets..."):
+        sheet, err = init_google_sheets_once()
+    if err:
+        st.error(err)
+        return False
 
-# === 重置答题状态 ===
+    if not st.session_state.user_results:
+        st.warning("无结果可保存")
+        return False
+
+    rows = []
+    for r in st.session_state.user_results:
+        row = [
+            r["doctor_id"], r["hospital_level"], r["work_years"], r["daily_patients"], r["prior_ai_trust"],
+            r["image_id"], r["true_label"], r["ai_label"], r["ai_is_correct"],
+            r["initial_top1"], r["initial_top2"], r["initial_top3"], r["initial_confidence"],
+            r["is_initial_top1_correct"], r["is_initial_top3_correct"],
+            r["interaction_type"], r["action_taken"], r["use_ai"],
+            r["final_top1"], r["final_top2"], r["final_top3"], r["final_top4"],
+            r["is_final_top1_correct"], r["is_final_top3_correct"], r["is_final_top4_correct"],
+            r["final_confidence"], r["confidence_gain"], r["decision_path"],
+            r["is_misled"], r["is_rescued"], r["time_baseline"], r["time_post_ai"],
+            r["submit_time"]
+        ]
+        rows.append(row)
+
+    try:
+        sheet.append_rows(rows)
+        st.success(f"✅ 已保存 {len(rows)} 条记录到 Google Sheets")
+        return True
+    except Exception as e:
+        st.error(f"❌ 写入失败：{str(e)}")
+        return False
+
+# === 重置单题状态 ===
 def reset_test_state():
     st.session_state.show_ai = False
     st.session_state.initial_top = ["请选择", "无", "无"]
@@ -225,405 +206,219 @@ def reset_test_state():
     st.session_state.time_baseline = 0
     st.session_state.ai_same_as_initial = False
 
-# === 图片压缩函数 ===
+# === 图片压缩 ===
 def compress_image(image_url):
     try:
-        response = requests.get(image_url, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        img = Image.open(BytesIO(response.content))
-        
+        r = requests.get(image_url, timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        img = Image.open(BytesIO(r.content))
         w, h = img.size
         ratio = IMAGE_COMPRESS_WIDTH / w
-        new_height = int(h * ratio)
-        img = img.resize((IMAGE_COMPRESS_WIDTH, new_height), Image.Resampling.LANCZOS)
-        
+        new_h = int(h * ratio)
+        img = img.resize((IMAGE_COMPRESS_WIDTH, new_h), Image.Resampling.LANCZOS)
         buf = BytesIO()
         img.save(buf, format="JPEG", quality=IMAGE_QUALITY, optimize=True)
         buf.seek(0)
         return buf
-    except Exception as e:
-        st.toast(f"⚠️ 图片压缩失败：{str(e)[:20]}", icon="⚠️")
-        # 异常时返回原始图片（添加空值判断）
+    except:
         try:
-            response = requests.get(image_url, timeout=REQUEST_TIMEOUT)
-            return BytesIO(response.content)
+            return BytesIO(requests.get(image_url, timeout=REQUEST_TIMEOUT).content)
         except:
-            # 终极兜底：返回占位图
-            placeholder = Image.new('RGB', (600, 400), color='lightgray')
+            blank = Image.new("RGB", (600,400), "#eee")
             buf = BytesIO()
-            placeholder.save(buf, format='JPEG')
+            blank.save(buf, "JPEG")
             buf.seek(0)
             return buf
 
-# === 性能优化：简化图片加载 + 压缩 ===
+# === 图片URL获取 ===
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def get_image_url_cached(image_id):
-    possible_paths = []
-    image_id_clean = re.sub(r'\.(jpg|png)$', '', image_id)
-    
-    if 'pityriasis-alba' in image_id_clean.lower() or 'pityrasis-alba' in image_id_clean.lower():
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/pityriasis-alba-images/{image_id_clean}.jpg")
-    elif 'psoriasis' in image_id_clean.lower():
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{image_id_clean}.jpg")
-    elif 'vitiligo' in image_id_clean.lower():
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/vitiligo/{image_id_clean}.jpg")
-    elif image_id_clean.startswith('ISIC_'):
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{image_id_clean}.jpg")
-    else:
-        possible_paths.append(f"{GITHUB_IMAGE_FOLDER}/{image_id_clean}.jpg")
+    clean_id = re.sub(r"\.(jpg|png)$", "", image_id)
+    paths = []
+    lower_id = clean_id.lower()
+    if "pity" in lower_id:
+        paths.append(f"{GITHUB_IMAGE_FOLDER}/pityriasis-alba-images/{clean_id}.jpg")
+    elif "psoriasis" in lower_id:
+        paths.append(f"{GITHUB_IMAGE_FOLDER}/PSORIASIS/{clean_id}.jpg")
+    elif "vitiligo" in lower_id:
+        paths.append(f"{GITHUB_IMAGE_FOLDER}/vitiligo/{clean_id}.jpg")
+    elif clean_id.startswith("ISIC_"):
+        paths.append(f"{GITHUB_IMAGE_FOLDER}/{clean_id}.jpg")
+    paths.append(f"{GITHUB_IMAGE_FOLDER}/{clean_id}.jpg")
 
-    for path in possible_paths[:3]:
-        raw_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{path}"
+    base = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/"
+    for p in paths[:4]:
+        u = base + p
         try:
-            response = requests.head(raw_url, timeout=REQUEST_TIMEOUT)
-            if response.status_code == 200:
-                return raw_url
+            if requests.head(u, timeout=REQUEST_TIMEOUT).status_code == 200:
+                return u
         except:
             continue
+    fallback = random.choice(["ISIC_0034334", "ISIC_0034402", "ISIC_0034411"])
+    return f"{base}{GITHUB_IMAGE_FOLDER}/{fallback}.jpg"
 
-    # 兜底图片（确保路径有效）
-    isic_fallback = ["ISIC_0034334", "ISIC_0034402", "ISIC_0034411"]
-    fallback_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{GITHUB_IMAGE_FOLDER}/{random.choice(isic_fallback)}.jpg"
-    return fallback_url
-
-# === 医生信息采集（适配手机） ===
+# === 医生信息页 ===
 def profile_step():
     st.title("🩺 皮肤病AI辅助诊断研究")
     st.subheader("第一步：医生信息采集（匿名）")
-    
-    with st.form("profile_form", clear_on_submit=True):
-        hospital_level = st.selectbox(
-            "1. 医院等级", 
-            ["三甲医院专科医生", "二级医院专科医生", "社区医院医生（含实习生）"]
-        )
-        work_years = st.selectbox(
-            "2. 工作年限", 
-            ["≤5年", "5-15年", ">15年", "无经验（实习生）"]
-        )
-        daily_patients = st.selectbox(
-            "3. 日均接诊量", 
-            ["≤30例", "30-50例", ">50例", "无接诊经验"]
-        )
-        prior_ai_trust = st.slider(
-            "4. 对AI的信任度（1-5）", 
-            1, 5, 3, help="1=极不信任，5=极度信任"
-        )
-        
-        if st.form_submit_button("✅ 提交并开始测试", type="primary"):
-            # 修复KeyError：字典键和选项文本完全匹配
-            level_prefix = {
-                "三甲医院专科医生": "A", 
-                "二级医院专科医生": "B", 
-                "社区医院医生（含实习生）": "C"
-            }
-            # 添加异常处理：防止键匹配失败
-            try:
-                prefix = level_prefix[hospital_level]
-            except KeyError:
-                prefix = "UNKNOWN"
-            st.session_state.doctor_id = f"{prefix}_DR_{uuid.uuid4().hex[:6].upper()}"
-            
+    with st.form("profile"):
+        level = st.selectbox("医院等级", ["三甲医院专科医生", "二级医院专科医生", "社区医院医生（含实习生）"])
+        work_year = st.selectbox("工作年限", ["≤5年", "5-15年", ">15年", "无经验（实习生）"])
+        daily = st.selectbox("日均接诊", ["≤30例", "30-50例", ">50例", "无接诊经验"])
+        trust = st.slider("对AI信任度 1-5", 1,5,3)
+        if st.form_submit_button("✅ 提交并开始测试"):
+            prefix_map = {"三甲医院专科医生":"A", "二级医院专科医生":"B", "社区医院医生（含实习生）":"C"}
+            did = f"{prefix_map[level]}_DR_{uuid.uuid4().hex[:6].upper()}"
+            st.session_state.doctor_id = did
             st.session_state.doctor_info = {
-                "doctor_id": st.session_state.doctor_id,
-                "hospital_level": hospital_level,
-                "work_years": work_years,
-                "daily_patients": daily_patients,
-                "prior_ai_trust": prior_ai_trust
+                "doctor_id": did, "hospital_level": level,
+                "work_years": work_year, "daily_patients": daily,
+                "prior_ai_trust": trust
             }
-            
-            # 加载测试数据（处理异常）
-            with st.spinner("加载测试数据..."):
-                gold_df, error = load_gold_data_cached()
-                if gold_df is None:
-                    st.error(error)
-                    st.stop()
-            
-            # 处理工作年限逻辑（添加空值判断）
-            if ">15年" in work_years and len(gold_df[~gold_df["ai_correct"]]) > 0:
-                more_trap = gold_df[~gold_df["ai_correct"]].sample(min(2, len(gold_df[~gold_df["ai_correct"]])))
-                gold_df = pd.concat([gold_df, more_trap]).drop_duplicates()
-            
-            st.session_state.test_set = load_balanced_test_set(gold_df)
+            with st.spinner("加载测试集..."):
+                df, err = load_gold_data_cached()
+                if err: st.error(err); return
+                if ">15年" in work_year and len(df[~df["ai_correct"]])>0:
+                    add = df[~df["ai_correct"]].sample(min(2, len(df[~df["ai_correct"]])), replace=False)
+                    df = pd.concat([df, add]).drop_duplicates()
+                st.session_state.test_set = load_balanced_test_set(df)
             st.session_state.step = "test"
             st.rerun()
 
-# === 答题流程（适配手机） ===
+# === 测试答题页 ===
 def test_step():
-    # 添加空值判断
-    if st.session_state.test_set is None or st.session_state.test_set.empty:
-        st.error("⚠️ 测试数据未加载或为空")
-        if st.button("🔄 返回重新开始", type="primary"):
-            init_session_state()
-            st.session_state.step = "profile"
-            st.rerun()
-        return
-    
+    ts = st.session_state.test_set
+    if ts is None or ts.empty:
+        st.error("测试集为空"); return
     idx = st.session_state.current_idx
-    test_set = st.session_state.test_set
-    
-    if idx >= len(test_set):
-        # 初始化Google Sheets（延迟到保存时）
-        with st.spinner("初始化数据存储..."):
-            sheet, error = init_google_sheets_once()
-            st.session_state.gs_sheet = sheet
-            st.session_state.gs_error = error
-        save_results_batch()  # 完成后一次性保存
+    if idx >= len(ts):
+        save_results_to_gs()
         st.session_state.step = "result"
         st.rerun()
-    
-    # 添加索引越界保护
-    try:
-        current_data = test_set.iloc[idx]
-    except IndexError:
-        st.error("⚠️ 测试数据索引错误")
-        st.session_state.step = "result"
-        st.rerun()
-    
-    image_id = current_data["image_id"]
-    true_label = current_data["true_cn"]
-    ai_label = current_data["ai_cn"]
-    ai_is_correct = (ai_label == true_label)
-    
-    st.title(f"📝 测试题 {idx + 1}/{TEST_COUNT}")
-    st.progress((idx + 1) / TEST_COUNT, text=f"进度：{idx + 1}/{TEST_COUNT}")
-    st.subheader("皮肤镜图像")
-    
-    image_url = get_image_url_cached(image_id)
-    compressed_img = compress_image(image_url)
-    try:
-        st.image(compressed_img, use_container_width=True, caption=f"图片ID：{image_id}")
-    except:
-        # 终极兜底图片
-        st.image("https://via.placeholder.com/600x400?text=皮肤镜示例图", use_container_width=True)
-    
-    st.markdown("### 第一阶段：独立诊断")
-    top1 = st.selectbox("首选 (Top-1) [必填]", ["请选择"] + ALL_CLASSES, key=f"t1_{idx}")
-    top2_options = ["无"] + [c for c in ALL_CLASSES if c != top1]
-    top2 = st.selectbox("次选 (Top-2) [可选]", top2_options, key=f"t2_{idx}", index=0)
-    top3_options = ["无"] + [c for c in ALL_CLASSES if c not in [top1, top2]]
-    top3 = st.selectbox("备选 (Top-3) [可选]", top3_options, key=f"t3_{idx}", index=0)
-    conf_init = st.slider("初始信心（1-10）", 1, 10, 5, key=f"c1_{idx}")
-    
-    is_valid = top1 != "请选择"
+
+    cur = ts.iloc[idx]
+    img_id = cur["image_id"]
+    truth = cur["true_cn"]
+    ai_lbl = cur["ai_cn"]
+    ai_ok = ai_lbl == truth
+
+    st.title(f"📝 第 {idx+1}/{TEST_COUNT} 题")
+    st.progress((idx+1)/TEST_COUNT)
+    st.subheader("皮损图像")
+    img_url = get_image_url_cached(img_id)
+    cpr = compress_image(img_url)
+    st.image(cpr, use_container_width=True, caption=f"ID: {img_id}")
+
+    st.markdown("### 一、独立诊断")
+    t1 = st.selectbox("首选 Top1", ["请选择"] + ALL_CLASSES, key=f"t1_{idx}")
+    t2_opt = ["无"] + [x for x in ALL_CLASSES if x != t1]
+    t2 = st.selectbox("次选 Top2", t2_opt, key=f"t2_{idx}")
+    t3_opt = ["无"] + [x for x in ALL_CLASSES if x not in (t1, t2)]
+    t3 = st.selectbox("备选 Top3", t3_opt, key=f"t3_{idx}")
+    conf_i = st.slider("初始信心 1-10", 1,10,5, key=f"ci_{idx}")
+
+    valid = t1 != "请选择"
     if not st.session_state.show_ai:
-        if st.button("🔍 获取AI辅助建议", disabled=not is_valid, type="secondary"):
-            st.session_state.initial_top = [top1, top2, top3]
-            st.session_state.initial_conf = conf_init
-            st.session_state.ai_suggestion = {"label": ai_label, "is_correct": ai_is_correct}
-            st.session_state.ai_same_as_initial = (top1 == ai_label)
+        if st.button("🔍 查看AI建议", disabled=not valid):
+            st.session_state.initial_top = [t1,t2,t3]
+            st.session_state.initial_conf = conf_i
+            st.session_state.ai_suggestion = {"label": ai_lbl}
+            st.session_state.ai_same_as_initial = (t1 == ai_lbl)
             st.session_state.question_start = time.time()
             st.session_state.time_baseline = round(time.time() - st.session_state.question_start, 2)
             st.session_state.show_ai = True
             st.rerun()
-        if not is_valid:
-            st.caption("⚠️ 请先选择Top1诊断结果")
-    
-    if st.session_state.show_ai:
-        st.markdown("### 第二阶段：AI辅助决策")
-        # 添加空值判断
-        ai_sug = st.session_state.ai_suggestion.get("label", "未知")
-        initial_top1 = st.session_state.initial_top[0] if st.session_state.initial_top else "请选择"
-        
-        if st.session_state.ai_same_as_initial:
-            st.success(f"✅ 你的初始诊断（{initial_top1}）与AI建议（{ai_sug}）一致！")
-            
-            if st.button("✅ 确认并进入下一题", key=f"btn_{idx}", type="primary"):
-                time_post_ai = round(time.time() - st.session_state.question_start, 2)
-                is_initial_top1_correct = (initial_top1 == true_label)
-                
-                result = {
-                    "doctor_id": st.session_state.doctor_id,
-                    "hospital_level": st.session_state.doctor_info["hospital_level"],
-                    "work_years": st.session_state.doctor_info["work_years"],
-                    "daily_patients": st.session_state.doctor_info["daily_patients"],
-                    "prior_ai_trust": st.session_state.doctor_info["prior_ai_trust"],
-                    "image_id": image_id,
-                    "true_label": true_label,
-                    "ai_label": ai_sug,
-                    "ai_is_correct": ai_is_correct,
-                    "initial_top1": initial_top1,
-                    "initial_top2": st.session_state.initial_top[1],
-                    "initial_top3": st.session_state.initial_top[2],
-                    "initial_confidence": st.session_state.initial_conf,
-                    "is_initial_top1_correct": is_initial_top1_correct,
-                    "is_initial_top3_correct": (true_label in st.session_state.initial_top),
-                    "interaction_type": "一致",
-                    "action_taken": "无需选择（AI与初始一致）",
-                    "use_ai": 0,
-                    "final_top1": initial_top1,
-                    "final_top2": st.session_state.initial_top[1],
-                    "final_top3": st.session_state.initial_top[2],
-                    "final_top4": "无",
-                    "is_final_top1_correct": is_initial_top1_correct,
-                    "is_final_top3_correct": (true_label in st.session_state.initial_top),
-                    "is_final_top4_correct": (true_label in st.session_state.initial_top),
-                    "final_confidence": st.session_state.initial_conf,
-                    "confidence_gain": 0,
-                    "decision_path": "一致（诊断相同）",
-                    "is_misled": False,
-                    "is_rescued": False,
-                    "time_baseline": st.session_state.time_baseline,
-                    "time_post_ai": time_post_ai,
-                    "submit_time": time.strftime("%Y-%m-%d %H:%M:%S")
-                }
-                
-                st.session_state.user_results.append(result)
-                reset_test_state()
-                st.session_state.current_idx = idx + 1
-                st.rerun()
-        
-        else:
-            st.warning(f"⚠️ 你的初始诊断（{initial_top1}）与AI建议（{ai_sug}）不一致！")
-            action = st.radio(
-                "如何处理AI建议？",
-                ["坚持原诊断", "替换为AI建议"],
-                key=f"act_{idx}"
-            )
-            
-            final_top1 = initial_top1 if action == "坚持原诊断" else ai_sug
-            conf_final = st.slider("最终信心（1-10）", 1, 10, st.session_state.initial_conf, key=f"c2_{idx}")
-            
-            if st.button("✅ 确认并进入下一题", key=f"btn_{idx}", type="primary"):
-                time_post_ai = round(time.time() - st.session_state.question_start, 2)
-                confidence_gain = conf_final - st.session_state.initial_conf
-                is_initial_top1_correct = (initial_top1 == true_label)
-                is_final_top1_correct = (final_top1 == true_label)
-                use_ai = 1 if action == "替换为AI建议" else 0
-                
-                decision_path = ""
-                is_misled = False
-                is_rescued = False
-                if is_initial_top1_correct and not is_final_top1_correct:
-                    decision_path = "误导（对改错）"
-                    is_misled = True
-                elif not is_initial_top1_correct and is_final_top1_correct:
-                    decision_path = "纠正（错改对）"
-                    is_rescued = True
-                elif is_initial_top1_correct and is_final_top1_correct:
-                    decision_path = "同对（坚持）"
-                else:
-                    decision_path = "盲从（错改错）"
-                
-                result = {
-                    "doctor_id": st.session_state.doctor_id,
-                    "hospital_level": st.session_state.doctor_info["hospital_level"],
-                    "work_years": st.session_state.doctor_info["work_years"],
-                    "daily_patients": st.session_state.doctor_info["daily_patients"],
-                    "prior_ai_trust": st.session_state.doctor_info["prior_ai_trust"],
-                    "image_id": image_id,
-                    "true_label": true_label,
-                    "ai_label": ai_sug,
-                    "ai_is_correct": ai_is_correct,
-                    "initial_top1": initial_top1,
-                    "initial_top2": st.session_state.initial_top[1],
-                    "initial_top3": st.session_state.initial_top[2],
-                    "initial_confidence": st.session_state.initial_conf,
-                    "is_initial_top1_correct": is_initial_top1_correct,
-                    "is_initial_top3_correct": (true_label in st.session_state.initial_top),
-                    "interaction_type": "冲突",
-                    "action_taken": action,
-                    "use_ai": use_ai,
-                    "final_top1": final_top1,
-                    "final_top2": st.session_state.initial_top[1],
-                    "final_top3": st.session_state.initial_top[2],
-                    "final_top4": "无",
-                    "is_final_top1_correct": is_final_top1_correct,
-                    "is_final_top3_correct": (true_label in [final_top1, st.session_state.initial_top[1], st.session_state.initial_top[2]]),
-                    "is_final_top4_correct": (true_label in [final_top1, st.session_state.initial_top[1], st.session_state.initial_top[2]]),
-                    "final_confidence": conf_final,
-                    "confidence_gain": confidence_gain,
-                    "decision_path": decision_path,
-                    "is_misled": is_misled,
-                    "is_rescued": is_rescued,
-                    "time_baseline": st.session_state.time_baseline,
-                    "time_post_ai": time_post_ai,
-                    "submit_time": time.strftime("%Y-%m-%d %H:%M:%S")
-                }
-                
-                st.session_state.user_results.append(result)
-                reset_test_state()
-                st.session_state.current_idx = idx + 1
-                st.rerun()
+        return
 
-# === 结果展示（适配手机） ===
-def result_step():
-    st.title("🏁 测试完成！")
-    # 添加空值判断
-    if st.session_state.get("doctor_id"):
-        st.success(f"✅ 你的唯一标识ID：{st.session_state.doctor_id}")
-    else:
-        st.success("✅ 测试完成！")
-    
-    if len(st.session_state.user_results) > 0:
-        user_df = pd.DataFrame(st.session_state.user_results)
-        
-        st.subheader("📊 你的诊断表现")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            initial_acc = user_df["is_initial_top1_correct"].mean() * 100
-            st.metric("初始准确率", f"{initial_acc:.1f}%")
-        with col2:
-            final_acc = user_df["is_final_top1_correct"].mean() * 100
-            st.metric("最终准确率", f"{final_acc:.1f}%", delta=f"{final_acc - initial_acc:.1f}%")
-        with col3:
-            ai_usage = user_df["use_ai"].sum()
-            st.metric("采纳AI次数", ai_usage)
-        
-        st.subheader("📋 答题记录")
-        display_df = user_df[["image_id", "true_label", "initial_top1", "final_top1", "ai_label", "decision_path"]]
-        display_df.columns = ["图片ID", "真实诊断", "初始诊断", "最终诊断", "AI建议", "决策路径"]
-        st.dataframe(display_df, use_container_width=True)
-    else:
-        st.info("📝 暂无答题记录")
-    
-    st.button("🔄 重新开始测试", on_click=init_session_state, type="primary")
+    st.markdown("### 二、AI辅助决策")
+    ai_sug = st.session_state.ai_suggestion["label"]
+    init1 = st.session_state.initial_top[0]
+    same = st.session_state.ai_same_as_initial
 
-# === 主函数 ===
-def main():
-    # 完善依赖检查（逐个检查，给出明确提示）
-    missing_deps = []
-    try:
-        import gspread
-    except ImportError:
-        missing_deps.append("gspread")
-    try:
-        import oauth2client
-    except ImportError:
-        missing_deps.append("oauth2client")
-    try:
-        from PIL import Image
-    except ImportError:
-        missing_deps.append("pillow")
-    try:
-        import requests
-    except ImportError:
-        missing_deps.append("requests")
-    try:
-        import pandas
-    except ImportError:
-        missing_deps.append("pandas")
-    
-    if missing_deps:
-        st.error(f"⚠️ 缺少依赖库，请运行：pip install {' '.join(missing_deps)}")
-        st.stop()
-    
-    # 确保会话状态初始化
-    if "step" not in st.session_state:
-        init_session_state()
-    
-    # 执行对应步骤（添加异常捕获）
-    try:
-        if st.session_state.step == "profile":
-            profile_step()
-        elif st.session_state.step == "test":
-            test_step()
-        elif st.session_state.step == "result":
-            result_step()
-    except Exception as e:
-        st.error(f"⚠️ 程序运行出错：{str(e)}")
-        if st.button("🔄 重置并重新开始"):
-            init_session_state()
+    if same:
+        st.success(f"✅ 一致：你的{init1} | AI：{ai_sug}")
+        if st.button("✅ 确认进入下一题", type="primary", key="ok_same"):
+            t_post = round(time.time() - st.session_state.question_start, 2)
+            ini_ok = (init1 == truth)
+            rec = {
+                **st.session_state.doctor_info,
+                "image_id": img_id, "true_label": truth, "ai_label": ai_sug, "ai_is_correct": ai_ok,
+                "initial_top1": init1, "initial_top2": st.session_state.initial_top[1], "initial_top3": st.session_state.initial_top[2],
+                "initial_confidence": st.session_state.initial_conf,
+                "is_initial_top1_correct": ini_ok, "is_initial_top3_correct": truth in st.session_state.initial_top,
+                "interaction_type": "一致", "action_taken": "直接确认", "use_ai": 0,
+                "final_top1": init1, "final_top2": st.session_state.initial_top[1], "final_top3": st.session_state.initial_top[2], "final_top4": "无",
+                "is_final_top1_correct": ini_ok, "is_final_top3_correct": truth in st.session_state.initial_top,
+                "is_final_top4_correct": truth in st.session_state.initial_top,
+                "final_confidence": st.session_state.initial_conf, "confidence_gain": 0,
+                "decision_path": "一致", "is_misled": False, "is_rescued": False,
+                "time_baseline": st.session_state.time_baseline, "time_post_ai": t_post,
+                "submit_time": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            st.session_state.user_results.append(rec)
+            reset_test_state()
+            st.session_state.current_idx += 1
             st.rerun()
+    else:
+        st.warning(f"⚠️ 不一致：你选{init1} | AI建议{ai_sug}")
+        act = st.radio("操作", ["坚持原诊断", "采纳AI建议"], key=f"act_{idx}")
+        final1 = init1 if act == "坚持原诊断" else ai_sug
+        conf_f = st.slider("最终信心 1-10", 1,10, st.session_state.initial_conf, key=f"cf_{idx}")
+        if st.button("✅ 确认进入下一题", type="primary", key="ok_diff"):
+            t_post = round(time.time() - st.session_state.question_start, 2)
+            gain = conf_f - st.session_state.initial_conf
+            ini_ok = (init1 == truth)
+            fin_ok = (final1 == truth)
+            use_ai = 1 if act == "采纳AI建议" else 0
+
+            if ini_ok and not fin_ok:
+                path, misled, rescued = "误导", True, False
+            elif not ini_ok and fin_ok:
+                path, misled, rescued = "纠正", False, True
+            elif ini_ok and fin_ok:
+                path, misled, rescued = "同对坚持", False, False
+            else:
+                path, misled, rescued = "错上改错", False, False
+
+            rec = {
+                **st.session_state.doctor_info,
+                "image_id": img_id, "true_label": truth, "ai_label": ai_sug, "ai_is_correct": ai_ok,
+                "initial_top1": init1, "initial_top2": st.session_state.initial_top[1], "initial_top3": st.session_state.initial_top[2],
+                "initial_confidence": st.session_state.initial_conf,
+                "is_initial_top1_correct": ini_ok, "is_initial_top3_correct": truth in st.session_state.initial_top,
+                "interaction_type": "冲突", "action_taken": act, "use_ai": use_ai,
+                "final_top1": final1, "final_top2": st.session_state.initial_top[1], "final_top3": st.session_state.initial_top[2], "final_top4": "无",
+                "is_final_top1_correct": fin_ok, "is_final_top3_correct": truth in [final1, st.session_state.initial_top[1], st.session_state.initial_top[2]],
+                "is_final_top4_correct": truth in [final1, st.session_state.initial_top[1], st.session_state.initial_top[2]],
+                "final_confidence": conf_f, "confidence_gain": gain,
+                "decision_path": path, "is_misled": misled, "is_rescued": rescued,
+                "time_baseline": st.session_state.time_baseline, "time_post_ai": t_post,
+                "submit_time": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            st.session_state.user_results.append(rec)
+            reset_test_state()
+            st.session_state.current_idx += 1
+            st.rerun()
+
+# === 结果页 ===
+def result_step():
+    st.title("🏁 测试完成")
+    st.success(f"ID：{st.session_state.doctor_id}")
+    st.info("所有数据已写入 Google Sheets，可前往表格查看")
+    if st.button("🔄 重新测试"):
+        init_session_state()
+        st.rerun()
+
+# === 主入口 ===
+def main():
+    init_session_state()
+    step = st.session_state.step
+    if step == "profile":
+        profile_step()
+    elif step == "test":
+        test_step()
+    elif step == "result":
+        result_step()
 
 if __name__ == "__main__":
     main()
