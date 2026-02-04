@@ -47,8 +47,8 @@ DISEASE_LABELS = {
 ALL_CLASSES = list(DISEASE_LABELS.values())
 TEST_COUNT = 10
 
-# === 性能优化：全局缓存Google Sheets连接 ===
-@st.cache_resource(ttl=CACHE_TTL)
+# === 性能优化：全局缓存Google Sheets连接（延迟初始化） ===
+@st.cache_resource(ttl=CACHE_TTL, show_spinner=False)
 def init_google_sheets_once():
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -62,14 +62,12 @@ def init_google_sheets_once():
             required_fields = ["type", "project_id", "private_key", "client_email"]
             missing_fields = [f for f in required_fields if f not in creds_dict]
             if missing_fields:
-                st.error(f"❌ 密钥缺少必要字段：{missing_fields}")
-                return None
+                return None, f"❌ 密钥缺少必要字段：{missing_fields}"
             
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         except KeyError:
             if not os.path.exists(LOCAL_GOOGLE_CREDENTIALS_FILE):
-                st.error(f"❌ 本地凭证文件不存在")
-                return None
+                return None, "❌ 本地凭证文件不存在"
             creds = ServiceAccountCredentials.from_json_keyfile_name(LOCAL_GOOGLE_CREDENTIALS_FILE, scope)
         
         client = gspread.authorize(creds)
@@ -89,15 +87,13 @@ def init_google_sheets_once():
             if not headers or len(headers) != len(required_headers):
                 sheet.clear()
                 sheet.append_row(required_headers)
-            return sheet
+            return sheet, None
         except gspread.exceptions.SpreadsheetNotFound:
-            st.error(f"❌ 未找到Google表格：{GOOGLE_SHEET_NAME}")
-            return None
+            return None, f"❌ 未找到Google表格：{GOOGLE_SHEET_NAME}"
     except Exception as e:
-        st.error(f"⚠️ Google Sheets初始化失败：{str(e)}")
-        return None
+        return None, f"⚠️ Google Sheets初始化失败：{str(e)}"
 
-# === 会话状态初始化 ===
+# === 会话状态初始化（延迟加载Google Sheets） ===
 def init_session_state():
     default_states = {
         "step": "profile",
@@ -118,14 +114,15 @@ def init_session_state():
         "time_baseline": 0,
         "doctor_id": "",
         "ai_same_as_initial": False,
-        "gs_sheet": init_google_sheets_once()  # 复用连接
+        "gs_sheet": None,  # 延迟初始化
+        "gs_error": None
     }
     for key, value in default_states.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
-# === 性能优化：缓存测试数据 ===
-@st.cache_data(ttl=CACHE_TTL)
+# === 性能优化：缓存测试数据（避免st.stop阻塞） ===
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def load_gold_data_cached():
     try:
         response = requests.get(GOLD_TXT, timeout=5)
@@ -135,18 +132,16 @@ def load_gold_data_cached():
         required_cols = ["image_id", "Top1_预测", "真实病名"]
         missing_cols = [col for col in required_cols if col not in df.columns]
         if missing_cols:
-            st.error(f"⚠️ 缺失必要字段：{', '.join(missing_cols)}")
-            st.stop()
+            return None, f"⚠️ 缺失必要字段：{', '.join(missing_cols)}"
         
         df["true_cn"] = df["真实病名"].map(DISEASE_LABELS).fillna("未知")
         df["ai_cn"] = df["Top1_预测"].map(DISEASE_LABELS).fillna("未知")
         df["ai_correct"] = df["true_cn"] == df["ai_cn"]
         df = df[df["true_cn"] != "未知"]
         df = df[df["ai_cn"] != "未知"]
-        return df
+        return df, None
     except Exception as e:
-        st.error(f"⚠️ 测试数据加载失败：{str(e)}")
-        st.stop()
+        return None, f"⚠️ 测试数据加载失败：{str(e)}"
 
 def load_balanced_test_set(df):
     ai_correct = df[df["ai_correct"]]
@@ -162,7 +157,10 @@ def load_balanced_test_set(df):
 
 # === 最终批量保存（移除自动保存） ===
 def save_results_batch():
-    if st.session_state.gs_sheet is None or len(st.session_state.user_results) == 0:
+    if st.session_state.gs_sheet is None:
+        st.error(st.session_state.gs_error)
+        return
+    if len(st.session_state.user_results) == 0:
         return
     
     try:
@@ -226,7 +224,7 @@ def compress_image(image_url):
         return BytesIO(response.content)
 
 # === 性能优化：简化图片加载 + 压缩 ===
-@st.cache_data(ttl=CACHE_TTL)
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def get_image_url_cached(image_id):
     possible_paths = []
     image_id_clean = re.sub(r'\.(jpg|png)$', '', image_id)
@@ -289,7 +287,13 @@ def profile_step():
                 "prior_ai_trust": prior_ai_trust
             }
             
-            gold_df = load_gold_data_cached()
+            # 加载测试数据（处理异常）
+            with st.spinner("加载测试数据..."):
+                gold_df, error = load_gold_data_cached()
+                if gold_df is None:
+                    st.error(error)
+                    st.stop()
+            
             if ">15年" in work_years:
                 more_trap = gold_df[~gold_df["ai_correct"]].sample(min(2, len(gold_df[~gold_df["ai_correct"]])))
                 gold_df = pd.concat([gold_df, more_trap]).drop_duplicates()
@@ -311,6 +315,11 @@ def test_step():
     test_set = st.session_state.test_set
     
     if idx >= len(test_set):
+        # 初始化Google Sheets（延迟到保存时）
+        with st.spinner("初始化数据存储..."):
+            sheet, error = init_google_sheets_once()
+            st.session_state.gs_sheet = sheet
+            st.session_state.gs_error = error
         save_results_batch()  # 完成后一次性保存
         st.session_state.step = "result"
         st.rerun()
@@ -516,9 +525,11 @@ def main():
         st.error("⚠️ 缺少依赖库，请运行：pip install gspread oauth2client pillow")
         st.stop()
     
+    # 确保会话状态初始化
     if "step" not in st.session_state:
         init_session_state()
     
+    # 执行对应步骤
     if st.session_state.step == "profile":
         profile_step()
     elif st.session_state.step == "test":
