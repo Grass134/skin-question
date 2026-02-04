@@ -143,15 +143,38 @@ def load_gold_data_cached():
     except Exception as e:
         return None, f"⚠️ 测试数据加载失败：{str(e)}"
 
+# === 修复UnboundLocalError：确保所有变量都有初始值 ===
 def load_balanced_test_set(df):
+    # 初始化空DataFrame作为兜底
+    correct_sample = pd.DataFrame()
+    incorrect_sample = pd.DataFrame()
+    
+    # 分离正确/错误样本
     ai_correct = df[df["ai_correct"]]
     ai_incorrect = df[~df["ai_correct"]]
-    correct_sample = ai_correct.sample(min(6, len(ai_correct)))
-    incorrect_sample = ai_incorrect.sample(min(4, len(incorrect_sample)))
-    if len(correct_sample) < 6:
-        correct_sample = pd.concat([correct_sample, ai_correct.sample(6 - len(correct_sample))])
-    if len(incorrect_sample) < 4:
-        incorrect_sample = pd.concat([incorrect_sample, ai_incorrect.sample(4 - len(incorrect_sample))])
+    
+    # 采样（添加空值判断）
+    if len(ai_correct) > 0:
+        correct_sample = ai_correct.sample(min(6, len(ai_correct)))
+        # 补充样本到6个（如果有足够数据）
+        if len(correct_sample) < 6:
+            need = 6 - len(correct_sample)
+            add_sample = ai_correct.sample(need) if len(ai_correct) >= need else ai_correct
+            correct_sample = pd.concat([correct_sample, add_sample])
+    
+    if len(ai_incorrect) > 0:
+        incorrect_sample = ai_incorrect.sample(min(4, len(ai_incorrect)))
+        # 补充样本到4个（如果有足够数据）
+        if len(incorrect_sample) < 4:
+            need = 4 - len(incorrect_sample)
+            add_sample = ai_incorrect.sample(need) if len(ai_incorrect) >= need else ai_incorrect
+            incorrect_sample = pd.concat([incorrect_sample, add_sample])
+    
+    # 处理所有样本都为空的极端情况
+    if len(correct_sample) == 0 and len(incorrect_sample) == 0:
+        return df.head(TEST_COUNT)
+    
+    # 合并并打乱顺序
     test_set = pd.concat([correct_sample, incorrect_sample]).sample(frac=1).reset_index(drop=True)
     return test_set.head(TEST_COUNT)
 
@@ -220,8 +243,17 @@ def compress_image(image_url):
         return buf
     except Exception as e:
         st.toast(f"⚠️ 图片压缩失败：{str(e)[:20]}", icon="⚠️")
-        response = requests.get(image_url, timeout=REQUEST_TIMEOUT)
-        return BytesIO(response.content)
+        # 异常时返回原始图片（添加空值判断）
+        try:
+            response = requests.get(image_url, timeout=REQUEST_TIMEOUT)
+            return BytesIO(response.content)
+        except:
+            # 终极兜底：返回占位图
+            placeholder = Image.new('RGB', (600, 400), color='lightgray')
+            buf = BytesIO()
+            placeholder.save(buf, format='JPEG')
+            buf.seek(0)
+            return buf
 
 # === 性能优化：简化图片加载 + 压缩 ===
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -249,8 +281,10 @@ def get_image_url_cached(image_id):
         except:
             continue
 
+    # 兜底图片（确保路径有效）
     isic_fallback = ["ISIC_0034334", "ISIC_0034402", "ISIC_0034411"]
-    return f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{GITHUB_IMAGE_FOLDER}/{random.choice(isic_fallback)}.jpg"
+    fallback_url = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{GITHUB_IMAGE_FOLDER}/{random.choice(isic_fallback)}.jpg"
+    return fallback_url
 
 # === 医生信息采集（适配手机） ===
 def profile_step():
@@ -282,7 +316,12 @@ def profile_step():
                 "二级医院专科医生": "B", 
                 "社区医院医生（含实习生）": "C"
             }
-            st.session_state.doctor_id = f"{level_prefix[hospital_level]}_DR_{uuid.uuid4().hex[:6].upper()}"
+            # 添加异常处理：防止键匹配失败
+            try:
+                prefix = level_prefix[hospital_level]
+            except KeyError:
+                prefix = "UNKNOWN"
+            st.session_state.doctor_id = f"{prefix}_DR_{uuid.uuid4().hex[:6].upper()}"
             
             st.session_state.doctor_info = {
                 "doctor_id": st.session_state.doctor_id,
@@ -299,17 +338,20 @@ def profile_step():
                     st.error(error)
                     st.stop()
             
-            if ">15年" in work_years:
+            # 处理工作年限逻辑（添加空值判断）
+            if ">15年" in work_years and len(gold_df[~gold_df["ai_correct"]]) > 0:
                 more_trap = gold_df[~gold_df["ai_correct"]].sample(min(2, len(gold_df[~gold_df["ai_correct"]])))
                 gold_df = pd.concat([gold_df, more_trap]).drop_duplicates()
+            
             st.session_state.test_set = load_balanced_test_set(gold_df)
             st.session_state.step = "test"
             st.rerun()
 
 # === 答题流程（适配手机） ===
 def test_step():
-    if st.session_state.test_set is None:
-        st.error("⚠️ 测试数据未加载")
+    # 添加空值判断
+    if st.session_state.test_set is None or st.session_state.test_set.empty:
+        st.error("⚠️ 测试数据未加载或为空")
         if st.button("🔄 返回重新开始", type="primary"):
             init_session_state()
             st.session_state.step = "profile"
@@ -329,7 +371,14 @@ def test_step():
         st.session_state.step = "result"
         st.rerun()
     
-    current_data = test_set.iloc[idx]
+    # 添加索引越界保护
+    try:
+        current_data = test_set.iloc[idx]
+    except IndexError:
+        st.error("⚠️ 测试数据索引错误")
+        st.session_state.step = "result"
+        st.rerun()
+    
     image_id = current_data["image_id"]
     true_label = current_data["true_cn"]
     ai_label = current_data["ai_cn"]
@@ -344,6 +393,7 @@ def test_step():
     try:
         st.image(compressed_img, use_container_width=True, caption=f"图片ID：{image_id}")
     except:
+        # 终极兜底图片
         st.image("https://via.placeholder.com/600x400?text=皮肤镜示例图", use_container_width=True)
     
     st.markdown("### 第一阶段：独立诊断")
@@ -370,8 +420,9 @@ def test_step():
     
     if st.session_state.show_ai:
         st.markdown("### 第二阶段：AI辅助决策")
-        ai_sug = st.session_state.ai_suggestion["label"]
-        initial_top1 = st.session_state.initial_top[0]
+        # 添加空值判断
+        ai_sug = st.session_state.ai_suggestion.get("label", "未知")
+        initial_top1 = st.session_state.initial_top[0] if st.session_state.initial_top else "请选择"
         
         if st.session_state.ai_same_as_initial:
             st.success(f"✅ 你的初始诊断（{initial_top1}）与AI建议（{ai_sug}）一致！")
@@ -497,7 +548,11 @@ def test_step():
 # === 结果展示（适配手机） ===
 def result_step():
     st.title("🏁 测试完成！")
-    st.success(f"✅ 你的唯一标识ID：{st.session_state.doctor_id}")
+    # 添加空值判断
+    if st.session_state.get("doctor_id"):
+        st.success(f"✅ 你的唯一标识ID：{st.session_state.doctor_id}")
+    else:
+        st.success("✅ 测试完成！")
     
     if len(st.session_state.user_results) > 0:
         user_df = pd.DataFrame(st.session_state.user_results)
@@ -518,12 +573,14 @@ def result_step():
         display_df = user_df[["image_id", "true_label", "initial_top1", "final_top1", "ai_label", "decision_path"]]
         display_df.columns = ["图片ID", "真实诊断", "初始诊断", "最终诊断", "AI建议", "决策路径"]
         st.dataframe(display_df, use_container_width=True)
+    else:
+        st.info("📝 暂无答题记录")
     
     st.button("🔄 重新开始测试", on_click=init_session_state, type="primary")
 
 # === 主函数 ===
 def main():
-    # 先检查依赖
+    # 完善依赖检查（逐个检查，给出明确提示）
     missing_deps = []
     try:
         import gspread
@@ -537,6 +594,14 @@ def main():
         from PIL import Image
     except ImportError:
         missing_deps.append("pillow")
+    try:
+        import requests
+    except ImportError:
+        missing_deps.append("requests")
+    try:
+        import pandas
+    except ImportError:
+        missing_deps.append("pandas")
     
     if missing_deps:
         st.error(f"⚠️ 缺少依赖库，请运行：pip install {' '.join(missing_deps)}")
@@ -546,13 +611,19 @@ def main():
     if "step" not in st.session_state:
         init_session_state()
     
-    # 执行对应步骤
-    if st.session_state.step == "profile":
-        profile_step()
-    elif st.session_state.step == "test":
-        test_step()
-    elif st.session_state.step == "result":
-        result_step()
+    # 执行对应步骤（添加异常捕获）
+    try:
+        if st.session_state.step == "profile":
+            profile_step()
+        elif st.session_state.step == "test":
+            test_step()
+        elif st.session_state.step == "result":
+            result_step()
+    except Exception as e:
+        st.error(f"⚠️ 程序运行出错：{str(e)}")
+        if st.button("🔄 重置并重新开始"):
+            init_session_state()
+            st.rerun()
 
 if __name__ == "__main__":
     main()
