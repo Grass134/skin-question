@@ -276,8 +276,13 @@ def profile_step():
         )
         
         if st.form_submit_button("✅ 提交并开始测试", type="primary"):
-            level_prefix = {"三甲医院专科医生":"A", "二级医院专科医生":"B", "社区医院医生":"C"}[hospital_level]
-            st.session_state.doctor_id = f"{level_prefix}_DR_{uuid.uuid4().hex[:6].upper()}"
+            # 修复KeyError：字典键和选项文本完全匹配
+            level_prefix = {
+                "三甲医院专科医生": "A", 
+                "二级医院专科医生": "B", 
+                "社区医院医生（含实习生）": "C"
+            }
+            st.session_state.doctor_id = f"{level_prefix[hospital_level]}_DR_{uuid.uuid4().hex[:6].upper()}"
             
             st.session_state.doctor_info = {
                 "doctor_id": st.session_state.doctor_id,
@@ -518,11 +523,23 @@ def result_step():
 
 # === 主函数 ===
 def main():
+    # 先检查依赖
+    missing_deps = []
     try:
         import gspread
+    except ImportError:
+        missing_deps.append("gspread")
+    try:
         import oauth2client
     except ImportError:
-        st.error("⚠️ 缺少依赖库，请运行：pip install gspread oauth2client pillow")
+        missing_deps.append("oauth2client")
+    try:
+        from PIL import Image
+    except ImportError:
+        missing_deps.append("pillow")
+    
+    if missing_deps:
+        st.error(f"⚠️ 缺少依赖库，请运行：pip install {' '.join(missing_deps)}")
         st.stop()
     
     # 确保会话状态初始化
