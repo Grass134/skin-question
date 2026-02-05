@@ -3,7 +3,7 @@ import pandas as pd
 import os
 import uuid
 import time
-from PIL import Image, UnidentifiedImageError
+from PIL import Image
 import requests
 import io
 import gspread
@@ -204,15 +204,12 @@ def reset_test_state():
     st.session_state.time_baseline = 0
     st.session_state.ai_same_as_initial = False
 
-# === 图片压缩（修复PIL识别错误）===
+# === 图片压缩 ===
 def compress_image(image_url):
     try:
         r = requests.get(image_url, timeout=REQUEST_TIMEOUT)
         r.raise_for_status()
         img = Image.open(BytesIO(r.content))
-        # 转换为RGB模式以避免格式问题
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
         w, h = img.size
         ratio = IMAGE_COMPRESS_WIDTH / w
         new_h = int(h * ratio)
@@ -221,20 +218,15 @@ def compress_image(image_url):
         img.save(buf, format="JPEG", quality=IMAGE_QUALITY, optimize=True)
         buf.seek(0)
         return buf
-    except UnidentifiedImageError:
-        # 图片无法识别时返回一张默认占位图
-        buf = BytesIO()
-        placeholder = Image.new("RGB", (IMAGE_COMPRESS_WIDTH, int(IMAGE_COMPRESS_WIDTH*0.75)), color="#DDDDDD")
-        placeholder.save(buf, format="JPEG")
-        buf.seek(0)
-        return buf
-    except Exception:
-        # 其他加载失败情况返回占位图
-        buf = BytesIO()
-        placeholder = Image.new("RGB", (IMAGE_COMPRESS_WIDTH, int(IMAGE_COMPRESS_WIDTH*0.75)), color="#DDDDDD")
-        placeholder.save(buf, format="JPEG")
-        buf.seek(0)
-        return buf
+    except:
+        try:
+            return BytesIO(requests.get(image_url, timeout=REQUEST_TIMEOUT).content)
+        except:
+            blank = Image.new("RGB", (600,400), "#eee")
+            buf = BytesIO()
+            blank.save(buf, "JPEG")
+            buf.seek(0)
+            return buf
 
 # === 图片URL获取 ===
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -346,7 +338,7 @@ def test_step():
     st.title(f"📝 病例诊断 - 第 {idx+1}/{TEST_COUNT} 题")
     st.progress((idx+1)/TEST_COUNT)
 
-    # 显示压缩后的图片（隐藏ID + 错误处理）
+    # 显示压缩后的图片（隐藏ID）
     st.subheader("皮损图像")
     img_url = get_image_url_cached(img_id)
     compressed_img = compress_image(img_url)
@@ -541,11 +533,9 @@ def result_step():
         with col3:
             st.metric("采纳AI次数", len(ai_used))
 
-    # 重新测试按钮（修复状态重置逻辑）
+    # 重新测试按钮
     if st.button("🔄 重新开始测试", type="primary"):
-        # 强制重置所有状态并跳转
         init_session_state()
-        st.session_state.step = "profile"
         st.rerun()
 
 # === 主函数 ===
