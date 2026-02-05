@@ -401,7 +401,7 @@ def test_step():
             st.session_state.current_idx += 1
             st.rerun()
 
-# === 结果页（用Streamlit原生组件替代Matplotlib，避免乱码）===
+# === 结果页（彻底修复颜色长度错误 + 替换废弃参数）===
 def result_step():
     st.title("🏁 测试完成")
     st.success(f"你的测试ID：{st.session_state.doctor_id}")
@@ -411,19 +411,19 @@ def result_step():
     if len(st.session_state.user_results) > 0:
         df = pd.DataFrame(st.session_state.user_results)
         
-        # 1. 诊断准确率对比（用原生st.bar_chart）
+        # 1. 诊断准确率对比（修复颜色长度错误）
         st.subheader("📊 诊断准确率对比")
         initial_acc = df["is_initial_top1_correct"].mean() * 100
         final_acc = df["is_final_top1_correct"].mean() * 100
         
         acc_data = pd.DataFrame({
-            "诊断阶段": ["初始诊断（无AI）", "最终诊断（AI辅助）"],
             "准确率（%）": [initial_acc, final_acc]
-        }).set_index("诊断阶段")
+        }, index=["初始诊断（无AI）", "最终诊断（AI辅助）"])
         
-        st.bar_chart(acc_data, color=["#3498db", "#2ecc71"], use_container_width=True)
+        # 单列数据只传1个颜色，避免长度不匹配
+        st.bar_chart(acc_data, color="#3498db", width="container")
 
-        # 2. AI采纳效果分析（用原生st.bar_chart）
+        # 2. AI采纳效果分析（修复颜色长度错误）
         st.subheader("📊 AI采纳效果分析")
         # 筛选采纳/未采纳AI的记录
         ai_used = df[df["use_ai"] == 1]
@@ -434,12 +434,10 @@ def result_step():
         ai_not_used_acc = ai_not_used["is_final_top1_correct"].mean() * 100 if len(ai_not_used) > 0 else 0
         
         ai_data = pd.DataFrame({
-            "决策类型": ["采纳AI建议", "未采纳AI建议"],
-            "准确率（%）": [ai_used_acc, ai_not_used_acc],
-            "样本数": [len(ai_used), len(ai_not_used)]
-        }).set_index("决策类型")
+            "准确率（%）": [ai_used_acc, ai_not_used_acc]
+        }, index=["采纳AI建议", "未采纳AI建议"])
         
-        st.bar_chart(ai_data["准确率（%）"], color=["#e74c3c", "#f39c12"], use_container_width=True)
+        st.bar_chart(ai_data, color="#e74c3c", width="container")
         # 显示样本数
         st.caption(f"采纳AI建议：{len(ai_used)}题 | 未采纳AI建议：{len(ai_not_used)}题")
 
