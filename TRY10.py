@@ -11,6 +11,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 import re
 import random
 from io import BytesIO
+import datetime  # 导入datetime处理时区
 
 # === 核心配置 ===
 st.set_option('client.showErrorDetails', True)
@@ -43,6 +44,12 @@ DISEASE_LABELS = {
 }
 ALL_CLASSES = list(DISEASE_LABELS.values())
 TEST_COUNT = 10
+
+# === 东八区时间获取函数（修复时间差）===
+def get_cst_time():
+    # 获取当前东八区时间
+    cst_tz = datetime.timezone(datetime.timedelta(hours=8))
+    return datetime.datetime.now(cst_tz).strftime("%Y-%m-%d %H:%M:%S")
 
 # === Google Sheets 初始化 ===
 @st.cache_resource(ttl=CACHE_TTL, show_spinner=False)
@@ -447,7 +454,7 @@ def test_step():
                         "is_rescued": rescued,
                         "time_baseline": st.session_state.time_baseline,
                         "time_post_ai": t_post,
-                        "submit_time": time.strftime("%Y-%m-%d %H:%M:%S")
+                        "submit_time": get_cst_time()  # 使用东八区时间
                     }
                     
                     st.session_state.user_results.append(result)
@@ -516,7 +523,7 @@ def test_step():
                         "is_rescued": rescued,
                         "time_baseline": st.session_state.time_baseline,
                         "time_post_ai": t_post,
-                        "submit_time": time.strftime("%Y-%m-%d %H:%M:%S")
+                        "submit_time": get_cst_time()  # 使用东八区时间
                     }
                     
                     st.session_state.user_results.append(result)
