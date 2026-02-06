@@ -3,7 +3,7 @@ import pandas as pd
 import os
 import uuid
 import time
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 import requests
 import io
 import gspread
@@ -17,13 +17,13 @@ st.set_option('client.showErrorDetails', True)
 st.set_page_config(page_title="皮肤病AI辅助诊断研究", page_icon="🩺", layout="centered")
 
 # 性能优化配置
-REQUEST_TIMEOUT = 1
+REQUEST_TIMEOUT = 2  # 延长超时时间，避免图片/文件加载超时
 CACHE_TTL = 3600
 IMAGE_COMPRESS_WIDTH = 600
 IMAGE_QUALITY = 85
 
-# GitHub 配置
-GITHUB_USERNAME = "Grass1121"
+# GitHub 配置【已修改为你的真实用户名grass134，解决404核心问题】
+GITHUB_USERNAME = "grass134"
 GITHUB_REPO = "skin-question"
 GOLD_TXT = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/main/boosted_final_detail4.UTF-8.txt"
 
@@ -114,7 +114,7 @@ def init_session_state():
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def load_gold_data_cached():
     try:
-        resp = requests.get(GOLD_TXT, timeout=8)
+        resp = requests.get(GOLD_TXT, timeout=10)  # 延长超时，确保文件能加载
         resp.raise_for_status()
         df = pd.read_csv(io.StringIO(resp.text), encoding="utf-8")
         req_cols = ["image_id", "Top1_预测", "真实病名"]
@@ -204,12 +204,15 @@ def reset_test_state():
     st.session_state.time_baseline = 0
     st.session_state.ai_same_as_initial = False
 
-# === 图片压缩 ===
+# === 图片压缩【新增异常处理，解决UnidentifiedImageError】 ===
 def compress_image(image_url):
     try:
         r = requests.get(image_url, timeout=REQUEST_TIMEOUT)
         r.raise_for_status()
+        # 处理图片格式问题，避免无法识别
         img = Image.open(BytesIO(r.content))
+        if img.mode in ("RGBA", "P", "L"):
+            img = img.convert("RGB")
         w, h = img.size
         ratio = IMAGE_COMPRESS_WIDTH / w
         new_h = int(h * ratio)
@@ -218,11 +221,19 @@ def compress_image(image_url):
         img.save(buf, format="JPEG", quality=IMAGE_QUALITY, optimize=True)
         buf.seek(0)
         return buf
+    except UnidentifiedImageError:
+        # 图片无法识别时返回灰色占位图
+        blank = Image.new("RGB", (600, 400), "#eee")
+        buf = BytesIO()
+        blank.save(buf, "JPEG")
+        buf.seek(0)
+        return buf
     except:
         try:
             return BytesIO(requests.get(image_url, timeout=REQUEST_TIMEOUT).content)
         except:
-            blank = Image.new("RGB", (600,400), "#eee")
+            # 所有加载失败情况都返回占位图，避免程序崩溃
+            blank = Image.new("RGB", (600, 400), "#eee")
             buf = BytesIO()
             blank.save(buf, "JPEG")
             buf.seek(0)
@@ -252,6 +263,7 @@ def get_image_url_cached(image_id):
                 return u
         except:
             continue
+    # 兜底图片，确保不会因图片不存在报错
     fallback = random.choice(["ISIC_0034334", "ISIC_0034402", "ISIC_0034411"])
     return f"{base}{GITHUB_IMAGE_FOLDER}/{fallback}.jpg"
 
@@ -483,7 +495,7 @@ def test_step():
                 st.session_state.current_idx += 1
                 st.rerun()
 
-# === 结果页（修复width参数为stretch）===
+# === 结果页（修复width参数为stretch，解决StreamlitInvalidWidthError）===
 def result_step():
     st.title("🏁 测试完成")
     st.success(f"你的测试ID：{st.session_state.doctor_id}")
@@ -502,7 +514,7 @@ def result_step():
             "准确率（%）": [initial_acc, final_acc]
         }, index=["初始诊断（无AI）", "最终诊断（AI辅助）"])
         
-        # 修复width参数为stretch，兼容所有Streamlit版本
+        # 修复width参数，兼容所有Streamlit版本
         st.bar_chart(acc_data, color="#3498db", width="stretch")
 
         # 2. AI采纳效果分析
@@ -533,9 +545,10 @@ def result_step():
         with col3:
             st.metric("采纳AI次数", len(ai_used))
 
-    # 重新测试按钮
+    # 重新开始测试按钮【修复失效问题，强制重置所有状态并跳转】
     if st.button("🔄 重新开始测试", type="primary"):
         init_session_state()
+        st.session_state.step = "profile"  # 强制切回信息页
         st.rerun()
 
 # === 主函数 ===
