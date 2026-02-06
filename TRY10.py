@@ -263,9 +263,17 @@ def get_image_url_cached(image_id):
     fallback = random.choice(["ISIC_0034334", "ISIC_0034402", "ISIC_0034411"])
     return f"{base}{GITHUB_IMAGE_FOLDER}/{fallback}.jpg"
 
-# === 医生信息页 ===
+# === 医生信息页（添加指定说明文字）===
 def profile_step():
     st.title("🩺 皮肤病AI辅助诊断研究问卷")
+    # 添加指定说明文字
+    st.markdown("""
+    亲爱的医生：
+    感恩您在忙碌的临床工作中，抽出时间参与本次调研～
+    本次测试共 10 道选择题，预计3-7分钟完成。您的每一次认真判断、每一个真实反馈，都承载着对医学研究的支持与责任。
+    我们会妥善保管您的所有数据（严格匿名），让您的专业经验发挥更大价值。
+    再次向您致以最诚挚的感谢，祝您一切顺遂！
+    """)
     st.subheader("第一步：医生基本信息采集（匿名）")
     with st.form("profile_form"):
         hospital_level = st.selectbox(
@@ -294,6 +302,8 @@ def profile_step():
         if submit_btn:
             prefix = "A" if "三甲" in hospital_level else "B" if "二级" in hospital_level else "C"
             doctor_id = f"{prefix}_DR_{uuid.uuid4().hex[:6].upper()}"
+            # 保存doctor_id到会话状态（修复ID不显示问题）
+            st.session_state.doctor_id = doctor_id
             
             st.session_state.doctor_info = {
                 "doctor_id": doctor_id,
@@ -316,7 +326,7 @@ def profile_step():
             st.session_state.step = "test"
             st.rerun()
 
-# === 测试答题页（核心修改：初始诊断与AI一致时跳过决策选择）===
+# === 测试答题页（将“可选”改为“选做”）===
 def test_step():
     ts = st.session_state.test_set
     if ts is None or ts.empty:
@@ -352,9 +362,11 @@ def test_step():
             help="请选择你认为最可能的诊断结果（必填）"
         )
         t2_opt = ["无"] + [x for x in ALL_CLASSES if x != t1]
-        t2 = st.selectbox("第二诊断结果（可选）", t2_opt, key=f"t2_{idx}")
+        # 将“可选”改为“选做”
+        t2 = st.selectbox("第二诊断结果（选做）", t2_opt, key=f"t2_{idx}")
         t3_opt = ["无"] + [x for x in ALL_CLASSES if x not in [t1, t2]]
-        t3 = st.selectbox("第三诊断结果（可选）", t3_opt, key=f"t3_{idx}")
+        # 将“可选”改为“选做”
+        t3 = st.selectbox("第三诊断结果（选做）", t3_opt, key=f"t3_{idx}")
         conf_i = st.slider(
             "对本次诊断的信心值（1-10分）",
             1, 10, 5,
@@ -376,7 +388,7 @@ def test_step():
                 st.session_state.show_ai = True
                 st.rerun()
 
-    # AI建议展示及最终决策（核心修改逻辑）
+    # AI建议展示及最终决策
     if st.session_state.show_ai:
         st.markdown("### 二、AI辅助决策")
         st.info(f"📌 AI辅助诊断建议：**{ai_lbl}**")
@@ -386,9 +398,7 @@ def test_step():
         
         if same_with_ai:
             st.success(f"✅ 你的初始诊断与AI建议一致：{init1}")
-            # 一致时自动跳过决策选择，直接显示确认按钮
             with st.form(f"final_decision_form_{idx}"):
-                # 最终信心默认与初始一致
                 final_conf = st.slider(
                     "最终诊断信心值（1-10分）",
                     1, 10, st.session_state.initial_conf,
@@ -400,8 +410,8 @@ def test_step():
                     t_post = round(time.time() - st.session_state.question_start, 2)
                     gain = final_conf - st.session_state.initial_conf
                     ini_ok = (init1 == truth)
-                    fin_ok = (init1 == truth)  # 一致时最终诊断同初始
-                    use_ai = 0  # 未采纳（因为初始与AI一致）
+                    fin_ok = (init1 == truth)
+                    use_ai = 0
                     
                     if ini_ok and fin_ok:
                         path, misled, rescued = "同对坚持", False, False
@@ -446,7 +456,6 @@ def test_step():
                     st.rerun()
         else:
             st.warning(f"⚠️ 你的初始诊断（{init1}）与AI建议（{ai_lbl}）不一致")
-            # 不一致时显示决策选择
             with st.form(f"final_decision_form_{idx}"):
                 act = st.radio(
                     "最终决策选择",
@@ -515,9 +524,10 @@ def test_step():
                     st.session_state.current_idx += 1
                     st.rerun()
 
-# === 结果页 ===
+# === 结果页（确保ID显示）===
 def result_step():
     st.title("🏁 测试完成")
+    # 显示测试ID
     st.success(f"你的测试ID：{st.session_state.doctor_id}")
     st.info("所有数据已成功写入 Google Sheets，可前往表格查看完整记录")
 
