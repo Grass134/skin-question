@@ -11,7 +11,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 import re
 import random
 from io import BytesIO
-import datetime  # 导入datetime处理时区
+import datetime
 
 # === 核心配置 ===
 st.set_option('client.showErrorDetails', True)
@@ -38,16 +38,25 @@ GITHUB_BRANCH = "main"
 
 # 疾病标签
 DISEASE_LABELS = {
-  "MEL": "黑色素瘤", "NV": "痣（色素痣）", "BCC": "基底细胞癌", "AK": "光化性角化病",
-  "BKL": "良性角化病（脂溢性角化等）", "DF": "皮肤纤维瘤", "VASC": "血管病变", "SCC": "鳞状细胞癌",
-  "Vitiligo": "白癜风", "Pityrasis-Alba": "白色糠疹", "Psoriasis": "银屑病", "UNK": "未知类别"
+    "MEL": "黑色素瘤", "NV": "痣（色素痣）", "BCC": "基底细胞癌", "AK": "光化性角化病",
+    "BKL": "良性角化病（脂溢性角化等）", "DF": "皮肤纤维瘤", "VASC": "血管病变", "SCC": "鳞状细胞癌",
+    "Vitiligo": "白癜风", "Pityrasis-Alba": "白色糠疹", "Psoriasis": "银屑病", "UNK": "未知类别"
 }
 ALL_CLASSES = list(DISEASE_LABELS.values())
 TEST_COUNT = 10
 
-# === 东八区时间获取函数（修复时间差）===
+# === 去重函数（保留顺序，排除"无"）===
+def deduplicate_preserve_order(lst):
+    seen = set()
+    result = []
+    for x in lst:
+        if x not in seen and x != "无":
+            seen.add(x)
+            result.append(x)
+    return result
+
+# === 东八区时间获取函数 ===
 def get_cst_time():
-    # 获取当前东八区时间
     cst_tz = datetime.timezone(datetime.timedelta(hours=8))
     return datetime.datetime.now(cst_tz).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -105,7 +114,7 @@ def init_session_state():
         "doctor_info": {},
         "ai_suggestion": {},
         "initial_top": ["请选择", "无", "无"],
-        "initial_conf": 5,  # 初始诊断信心默认5（1-10）
+        "initial_conf": 5,
         "final_top1": "", "final_top2": "", "final_top3": "", "final_top4": "",
         "final_conf": 5,
         "question_start": 0,
@@ -270,17 +279,16 @@ def get_image_url_cached(image_id):
     fallback = random.choice(["ISIC_0034334", "ISIC_0034402", "ISIC_0034411"])
     return f"{base}{GITHUB_IMAGE_FOLDER}/{fallback}.jpg"
 
-# === 医生信息页（核心修改：AI初始信任度改为1-10分选择）===
+# === 医生信息页 ===
 def profile_step():
     st.title("🩺 皮肤病AI辅助诊断研究问卷")
-    # 添加指定说明文字
     st.markdown("""
-        亲爱的医生：
-        感恩您在忙碌的临床工作中，抽出时间参与本次调研～
-        本次测试共 10 道选择题，预计3-7分钟完成。您的每一次认真判断、每一个真实反馈，都承载着对医学研究的支持与责任。
-        我们会妥善保管您的所有数据（严格匿名），让您的专业经验发挥更大价值。
-        再次向您致以最诚挚的感谢，祝您一切顺遂！
-        """)
+亲爱的医生：
+感恩您在忙碌的临床工作中，抽出时间参与本次调研～
+本次测试共 10 道选择题，预计3-7分钟完成。您的每一次认真判断、每一个真实反馈，都承载着对医学研究的支持与责任。
+我们会妥善保管您的所有数据（严格匿名），让您的专业经验发挥更大价值。
+再次向您致以最诚挚的感谢，祝您一切顺遂！
+""")
     st.subheader("第一步：医生基本信息采集（匿名）")
     with st.form("profile_form"):
         hospital_level = st.selectbox(
@@ -298,11 +306,10 @@ def profile_step():
             ["≤15例", "15-30例", ">30例", "无接诊经验"],
             help="请选择你的日均接诊量范围"
         )
-        # 核心修改：AI初始信任度从1-5滑块改为1-10下拉选择，默认值5
         prior_ai_trust = st.selectbox(
             "对AI辅助诊断的初始信任度（1-10分）",
-            options=list(range(1, 11)),  # 1到10的数字选项
-            index=4,  # 默认选中5（索引从0开始，4对应第5个值）
+            options=list(range(1, 11)),
+            index=4,
             help="1分：完全不信任，10分：完全信任"
         )
 
@@ -311,7 +318,6 @@ def profile_step():
     if submit_btn:
         prefix = "A" if "三甲" in hospital_level else "B" if "二级" in hospital_level else "C"
         doctor_id = f"{prefix}_DR_{uuid.uuid4().hex[:6].upper()}"
-        # 保存doctor_id到会话状态（修复ID不显示问题）
         st.session_state.doctor_id = doctor_id
 
         st.session_state.doctor_info = {
@@ -327,7 +333,6 @@ def profile_step():
             if err:
                 st.error(err)
                 return
-            # 修复add_samples未定义问题
             if work_years == ">15年" and len(df[~df["ai_correct"]]) >= 2:
                 add_samples = df[~df["ai_correct"]].sample(2)
                 df = pd.concat([df, add_samples]).drop_duplicates()
@@ -336,7 +341,7 @@ def profile_step():
         st.session_state.step = "test"
         st.rerun()
 
-# === 测试答题页（初始诊断信心保持1-10分滑块，“可选”改“选做”）===
+# === 测试答题页 ===
 def test_step():
     ts = st.session_state.test_set
     if ts is None or ts.empty:
@@ -372,12 +377,9 @@ def test_step():
             help="请选择你认为最可能的诊断结果（必填）"
         )
         t2_opt = ["无"] + [x for x in ALL_CLASSES if x != t1]
-        # 将“可选”改为“选做”
         t2 = st.selectbox("第二诊断结果（选做）", t2_opt, key=f"t2_{idx}")
         t3_opt = ["无"] + [x for x in ALL_CLASSES if x not in [t1, t2]]
-        # 将“可选”改为“选做”
         t3 = st.selectbox("第三诊断结果（选做）", t3_opt, key=f"t3_{idx}")
-        # 初始诊断信心保持1-10分滑块
         conf_i = st.slider(
             "对本次诊断的信心值（1-10分）",
             1, 10, 5,
@@ -395,27 +397,24 @@ def test_step():
                 st.session_state.ai_suggestion = {"label": ai_lbl}
                 st.session_state.ai_same_as_initial = (t1 == ai_lbl)
                 st.session_state.question_start = time.time()
-                # 修复时间计算错误
                 st.session_state.time_baseline = round(time.time() - st.session_state.question_start, 2)
                 st.session_state.show_ai = True
                 st.rerun()
 
-    # AI建议展示及最终决策
     if st.session_state.show_ai:
         st.markdown("### 二、AI辅助决策")
         st.info(f"📌 AI辅助诊断建议：**{ai_lbl}**")
 
-        init1 = st.session_state.initial_top[0]
+        init1, init2, init3 = st.session_state.initial_top
         same_with_ai = init1 == ai_lbl
-        
+
         if same_with_ai:
             st.success(f"✅ 你的初始诊断与AI建议一致：{init1}")
             with st.form(f"final_decision_form_{idx}"):
                 final_conf = st.slider(
                     "最终诊断信心值（1-10分）",
                     1, 10, st.session_state.initial_conf,
-                    key=f"cf_{idx}",
-                    help="1分：完全不确定，10分：完全确定"
+                    key=f"cf_{idx}"
                 )
                 submit_final = st.form_submit_button("✅ 确认最终诊断，进入下一题")
                 if submit_final:
@@ -424,6 +423,16 @@ def test_step():
                     ini_ok = (init1 == truth)
                     fin_ok = (init1 == truth)
                     use_ai = 0
+
+                    final_list = deduplicate_preserve_order([init1, init2, init3])
+                    while len(final_list) < 3:
+                        final_list.append("无")
+                    final_list = final_list[:3]
+                    final1, final2, final3 = final_list
+                    final4 = "无"
+
+                    is_final_top3_correct = truth in [final1, final2, final3]
+                    is_final_top4_correct = truth in [final1, final2, final3, final4]
 
                     if ini_ok and fin_ok:
                         path, misled, rescued = "同对坚持", False, False
@@ -437,138 +446,21 @@ def test_step():
                         "ai_label": ai_lbl,
                         "ai_is_correct": ai_ok,
                         "initial_top1": init1,
-                        "initial_top2": st.session_state.initial_top[1],
-                        "initial_top3": st.session_state.initial_top[2],
-                        "initial_confidence": st.session_state.initial_conf,
-                        "is_initial_top1_correct": ini_ok,
-                        "is_initial_top3_correct": truth in st.session_state.initial_top,
-                        "interaction_type": "一致",
-                        "action_taken": "无需选择（初始与AI一致）",
-                        "use_ai": use_ai,
-                        "final_top1": init1,
-                        "final_top2": st.session_state.initial_top[1],
-                        "final_top3": st.session_state.initial_top[2],
-                        "final_top4": "无",
-                        "is_final_top1_correct": fin_ok,
-                        "is_final_top3_correct": truth in [init1, st.session_state.initial_top[1], st.session_state.initial_top[2]],
-                        "is_final_top4_correct": False,
-                        "final_confidence": final_conf,
-                        "confidence_gain": gain,
-                        "decision_path": path,
-                        "is_misled": misled,
-                        "is_rescued": rescued,
-                        "time_baseline": st.session_state.time_baseline,
-                        "time_post_ai": t_post,
-                        "submit_time": get_cst_time()  # 使用东八区时间
-                    }
-
-                    st.session_state.user_results.append(result)
-                    reset_test_state()
-                    st.session_state.current_idx += 1
-                    st.rerun()
-        else:
-            st.warning(f"⚠️ 你的初始诊断（{init1}）与AI建议（{ai_lbl}）不一致")
-            ai_in_top3 = ai_lbl in st.session_state.initial_top
-            
-            with st.form(f"final_decision_form_{idx}"):
-                # 根据AI是否在Top3显示不同选项
-                if not ai_in_top3:
-                    act = st.radio(
-                        "AI未出现在你的前三诊断中，你的选择是：",
-                        ["坚持原诊断", "替换为首选（Top1）", "加入作为第四诊断"],
-                        key=f"act_{idx}"
-                    )
-                else:
-                    act = st.radio(
-                        "最终决策选择",
-                        ["坚持原诊断", "替换为首选（Top1）"],
-                        key=f"act_{idx}"
-                    )
-
-                init2 = st.session_state.initial_top[1]
-                init3 = st.session_state.initial_top[2]
-
-                # 决策逻辑
-                if act == "坚持原诊断":
-                    final1 = init1
-                    final2 = init2
-                    final3 = init3
-                    final4 = "无"
-                    use_ai = 0
-                elif act == "替换为首选（Top1）":
-                    final1 = ai_lbl
-                    final2 = init1
-                    final3 = init2
-                    final4 = init3
-                    use_ai = 1
-                elif act == "加入作为第四诊断":
-                    final1 = init1
-                    final2 = init2
-                    final3 = init3
-                    final4 = ai_lbl
-                    use_ai = 1
-                else:
-                    final1 = init1
-                    final2 = init2
-                    final3 = init3
-                    final4 = "无"
-                    use_ai = 0
-
-                st.session_state.final_top1 = final1
-
-                final_conf = st.slider(
-                    "最终诊断信心值（1-10分）",
-                    1, 10, st.session_state.initial_conf,
-                    key=f"cf_{idx}"
-                )
-
-                submit_final = st.form_submit_button("✅ 确认最终诊断，进入下一题")
-                if submit_final:
-                    t_post = round(time.time() - st.session_state.question_start, 2)
-                    gain = final_conf - st.session_state.initial_conf
-
-                    ini_ok = (init1 == truth)
-                    fin_ok = (final1 == truth)
-
-                    # 决策路径
-                    if ini_ok and not fin_ok:
-                        path, misled, rescued = "误导", True, False
-                    elif not ini_ok and fin_ok:
-                        path, misled, rescued = "纠正", False, True
-                    elif ini_ok and fin_ok:
-                        path, misled, rescued = "同对坚持", False, False
-                    else:
-                        path, misled, rescued = "错上改错", False, False
-
-                    result = {
-                        **st.session_state.doctor_info,
-                        "image_id": img_id,
-                        "true_label": truth,
-                        "ai_label": ai_lbl,
-                        "ai_is_correct": ai_ok,
-                        
-                        "initial_top1": init1,
                         "initial_top2": init2,
                         "initial_top3": init3,
                         "initial_confidence": st.session_state.initial_conf,
                         "is_initial_top1_correct": ini_ok,
-                        "is_initial_top3_correct": truth in st.session_state.initial_top,
-                        
-                        "ai_in_initial_top3": ai_lbl in st.session_state.initial_top,
-                        
-                        "interaction_type": "冲突",
-                        "action_taken": act,
+                        "is_initial_top3_correct": truth in [init1, init2, init3],
+                        "interaction_type": "一致",
+                        "action_taken": "无需选择（初始与AI一致）",
                         "use_ai": use_ai,
-                        
                         "final_top1": final1,
                         "final_top2": final2,
                         "final_top3": final3,
                         "final_top4": final4,
-                        
                         "is_final_top1_correct": fin_ok,
-                        "is_final_top3_correct": truth in [final1, final2, final3],
-                        "is_final_top4_correct": truth in [final1, final2, final3, final4],
-                        
+                        "is_final_top3_correct": is_final_top3_correct,
+                        "is_final_top4_correct": is_final_top4_correct,
                         "final_confidence": final_conf,
                         "confidence_gain": gain,
                         "decision_path": path,
@@ -584,10 +476,129 @@ def test_step():
                     st.session_state.current_idx += 1
                     st.rerun()
 
-# === 结果页（确保ID显示）===
+        else:
+            st.warning(f"⚠️ 你的初始诊断（{init1}）与AI建议（{ai_lbl}）不一致")
+            ai_in_top3 = ai_lbl in [init1, init2, init3]
+
+            with st.form(f"final_decision_form_{idx}"):
+                if not ai_in_top3:
+                    act = st.radio(
+                        "AI未出现在你的前三诊断中，你的选择是：",
+                        ["坚持原诊断", "替换为首选（Top1）", "加入作为第四诊断"],
+                        key=f"act_{idx}"
+                    )
+                else:
+                    act = st.radio(
+                        "最终决策选择",
+                        ["坚持原诊断", "替换为首选（Top1）"],
+                        key=f"act_{idx}"
+                    )
+
+                # ===================== 核心规则：final_top4 只有选“加入第四”才填病名 =====================
+                final4 = "无"
+                use_ai = 0
+
+                if act == "坚持原诊断":
+                    final_list = deduplicate_preserve_order([init1, init2, init3])
+                    while len(final_list) < 3:
+                        final_list.append("无")
+                    final_list = final_list[:3]
+                    final1, final2, final3 = final_list
+
+                elif act == "替换为首选（Top1）":
+                    temp = [ai_lbl, init1, init2, init3]
+                    final_list = deduplicate_preserve_order(temp)
+                    while len(final_list) < 3:
+                        final_list.append("无")
+                    final_list = final_list[:3]
+                    final1, final2, final3 = final_list
+                    use_ai = 1
+
+                elif act == "加入作为第四诊断":
+                    # 只有这里：final4 = ai_lbl
+                    final_list = deduplicate_preserve_order([init1, init2, init3])
+                    while len(final_list) < 3:
+                        final_list.append("无")
+                    final_list = final_list[:3]
+                    final1, final2, final3 = final_list
+                    final4 = ai_lbl
+                    use_ai = 1
+
+                else:
+                    final_list = deduplicate_preserve_order([init1, init2, init3])
+                    while len(final_list) < 3:
+                        final_list.append("无")
+                    final_list = final_list[:3]
+                    final1, final2, final3 = final_list
+
+                # 计算 Top3 / Top4 正确
+                is_final_top1_correct = (final1 == truth)
+                is_final_top3_correct = truth in [final1, final2, final3]
+                is_final_top4_correct = truth in [final1, final2, final3, final4]
+
+                final_conf = st.slider(
+                    "最终诊断信心值（1-10分）",
+                    1, 10, st.session_state.initial_conf,
+                    key=f"cf_{idx}"
+                )
+
+                submit_final = st.form_submit_button("✅ 确认最终诊断，进入下一题")
+                if submit_final:
+                    t_post = round(time.time() - st.session_state.question_start, 2)
+                    gain = final_conf - st.session_state.initial_conf
+                    ini_ok = (init1 == truth)
+                    fin_ok = is_final_top1_correct
+
+                    if ini_ok and not fin_ok:
+                        path, misled, rescued = "误导", True, False
+                    elif not ini_ok and fin_ok:
+                        path, misled, rescued = "纠正", False, True
+                    elif ini_ok and fin_ok:
+                        path, misled, rescued = "同对坚持", False, False
+                    else:
+                        path, misled, rescued = "错上改错", False, False
+
+                    result = {
+                        **st.session_state.doctor_info,
+                        "image_id": img_id,
+                        "true_label": truth,
+                        "ai_label": ai_lbl,
+                        "ai_is_correct": ai_ok,
+                        "initial_top1": init1,
+                        "initial_top2": init2,
+                        "initial_top3": init3,
+                        "initial_confidence": st.session_state.initial_conf,
+                        "is_initial_top1_correct": ini_ok,
+                        "is_initial_top3_correct": truth in [init1, init2, init3],
+                        "ai_in_initial_top3": ai_in_top3,
+                        "interaction_type": "冲突",
+                        "action_taken": act,
+                        "use_ai": use_ai,
+                        "final_top1": final1,
+                        "final_top2": final2,
+                        "final_top3": final3,
+                        "final_top4": final4,
+                        "is_final_top1_correct": is_final_top1_correct,
+                        "is_final_top3_correct": is_final_top3_correct,
+                        "is_final_top4_correct": is_final_top4_correct,
+                        "final_confidence": final_conf,
+                        "confidence_gain": gain,
+                        "decision_path": path,
+                        "is_misled": misled,
+                        "is_rescued": rescued,
+                        "time_baseline": st.session_state.time_baseline,
+                        "time_post_ai": t_post,
+                        "submit_time": get_cst_time()
+                    }
+
+                    st.session_state.user_results.append(result)
+                    reset_test_state()
+                    st.session_state.current_idx += 1
+                    st.rerun()
+
+# === 结果页 ===
 def result_step():
     st.title("🏁 测试完成")
-    # 显示测试ID
     st.success(f"你的测试ID：{st.session_state.doctor_id}")
     st.info("所有数据已成功写入 Google Sheets，可前往表格查看完整记录")
 
@@ -635,7 +646,6 @@ def result_step():
 # === 主函数 ===
 def main():
     init_session_state()
-
     step = st.session_state.step
     if step == "profile":
         profile_step()
