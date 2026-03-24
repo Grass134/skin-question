@@ -117,7 +117,7 @@ def init_session_state():
         "initial_conf": 5,
         "final_top1": "", "final_top2": "", "final_top3": "", "final_top4": "",
         "final_conf": 5,
-        "question_start": 0,
+        "question_start": None,
         "time_baseline": 0,
         "doctor_id": "",
         "ai_same_as_initial": False,
@@ -219,6 +219,7 @@ def reset_test_state():
     st.session_state.final_conf = 5
     st.session_state.time_baseline = 0
     st.session_state.ai_same_as_initial = False
+    st.session_state.question_start = None  # 修复点
 
 # === 图片压缩 ===
 def compress_image(image_url):
@@ -360,6 +361,10 @@ def test_step():
     ai_lbl = cur["ai_cn"]
     ai_ok = ai_lbl == truth
 
+    # ========== 题目加载时立即开始计时 ==========
+    if st.session_state.question_start is None:
+        st.session_state.question_start = time.time()
+
     st.title(f"📝 病例诊断 - 第 {idx+1}/{TEST_COUNT} 题")
     st.progress((idx+1)/TEST_COUNT)
 
@@ -392,12 +397,14 @@ def test_step():
             if t1 == "请选择":
                 st.error("请至少选择首选诊断结果后提交")
             else:
+                # ========== 正确计算初始诊断时间 ==========
+                time_baseline = round(time.time() - st.session_state.question_start, 2)
+                st.session_state.time_baseline = time_baseline
+
                 st.session_state.initial_top = [t1, t2, t3]
                 st.session_state.initial_conf = conf_i
                 st.session_state.ai_suggestion = {"label": ai_lbl}
                 st.session_state.ai_same_as_initial = (t1 == ai_lbl)
-                st.session_state.question_start = time.time()
-                st.session_state.time_baseline = round(time.time() - st.session_state.question_start, 2)
                 st.session_state.show_ai = True
                 st.rerun()
 
@@ -494,7 +501,6 @@ def test_step():
                         key=f"act_{idx}"
                     )
 
-                # ===================== 核心规则：final_top4 只有选“加入第四”才填病名 =====================
                 final4 = "无"
                 use_ai = 0
 
@@ -515,7 +521,6 @@ def test_step():
                     use_ai = 1
 
                 elif act == "加入作为第四诊断":
-                    # 只有这里：final4 = ai_lbl
                     final_list = deduplicate_preserve_order([init1, init2, init3])
                     while len(final_list) < 3:
                         final_list.append("无")
@@ -531,7 +536,6 @@ def test_step():
                     final_list = final_list[:3]
                     final1, final2, final3 = final_list
 
-                # 计算 Top3 / Top4 正确
                 is_final_top1_correct = (final1 == truth)
                 is_final_top3_correct = truth in [final1, final2, final3]
                 is_final_top4_correct = truth in [final1, final2, final3, final4]
