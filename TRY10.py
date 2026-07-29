@@ -23,6 +23,14 @@ st.markdown(
     [data-testid="stDeployButton"] {
         display: none;
     }
+    /* 新增：隐藏底部Hosted with Streamlit红色横幅 */
+    footer {
+        visibility: hidden;
+    }
+    /* 修复底部留白 */
+    .stApp {
+        padding-bottom: 0px;
+    }
     </style>
     """,
     unsafe_allow_html=True
@@ -393,9 +401,9 @@ def test_step():
             help="请选择你认为最可能的诊断结果（必填）"
         )
         t2_opt = ["无"] + [x for x in ALL_CLASSES if x != t1]
-        t2 = st.selectbox("第二诊断结果（选做）", t2_opt, key=f"t2_{idx}")
+        t2 = st.selectbox("第二诊断结果", t2_opt, key=f"t2_{idx}")
         t3_opt = ["无"] + [x for x in ALL_CLASSES if x not in [t1, t2]]
-        t3 = st.selectbox("第三诊断结果（选做）", t3_opt, key=f"t3_{idx}")
+        t3 = st.selectbox("第三诊断结果", t3_opt, key=f"t3_{idx}")
         conf_i = st.slider(
             "对本次诊断的信心值（1-10分）",
             1, 10, 5,
