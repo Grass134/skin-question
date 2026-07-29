@@ -17,21 +17,6 @@ import datetime
 st.set_option('client.showErrorDetails', True)
 st.set_page_config(page_title="皮肤病AI辅助诊断研究", page_icon="🩺", layout="centered")
 
-# 注入全局CSS：隐藏右上角工具栏、页眉页脚、右下角皇冠部署按钮及多余UI，防止医生误触
-HIDE_UI_CSS = """
-<style>
-#MainMenu {visibility: hidden;}
-footer {visibility: hidden;}
-header {visibility: hidden;}
-.stDeployButton {display:none;}
-[data-testid="stToolbar"] {visibility: hidden; height: 0%; position: fixed;}
-[data-testid="stDecoration"] {visibility: hidden; height: 0%; position: fixed;}
-[data-testid="stStatusWidget"] {visibility: hidden;}
-.viewerBadge_container__1QSob {display: none !important;}
-</style>
-"""
-st.markdown(HIDE_UI_CSS, unsafe_allow_html=True)
-
 # 性能优化配置
 REQUEST_TIMEOUT = 2
 CACHE_TTL = 3600
@@ -234,7 +219,7 @@ def reset_test_state():
     st.session_state.final_conf = 5
     st.session_state.time_baseline = 0
     st.session_state.ai_same_as_initial = False
-    st.session_state.question_start = None
+    st.session_state.question_start = None  # 修复点
 
 # === 图片压缩 ===
 def compress_image(image_url):
@@ -307,11 +292,6 @@ def profile_step():
 """)
     st.subheader("第一步：医生基本信息采集（匿名）")
     with st.form("profile_form"):
-        doctor_id_input = st.text_input(
-            "医生编号（断点续答可输入已有编号，新用户留空自动生成）",
-            value="",
-            help="若中途退出需恢复答题，请输入您之前生成的医生编号"
-        )
         hospital_level = st.selectbox(
             "所在医院等级",
             ["三甲医院专科医生", "二级医院专科医生", "社区医院/实习生"],
@@ -337,11 +317,8 @@ def profile_step():
         submit_btn = st.form_submit_button("✅ 提交信息，开始测试")
 
     if submit_btn:
-        if doctor_id_input.strip():
-            doctor_id = doctor_id_input.strip()
-        else:
-            prefix = "A" if "三甲" in hospital_level else "B" if "二级" in hospital_level else "C"
-            doctor_id = f"{prefix}_DR_{uuid.uuid4().hex[:6].upper()}"
+        prefix = "A" if "三甲" in hospital_level else "B" if "二级" in hospital_level else "C"
+        doctor_id = f"{prefix}_DR_{uuid.uuid4().hex[:6].upper()}"
         st.session_state.doctor_id = doctor_id
 
         st.session_state.doctor_info = {
@@ -352,23 +329,7 @@ def profile_step():
             "prior_ai_trust": prior_ai_trust
         }
 
-        with st.spinner("正在加载测试病例与恢复答题进度..."):
-            # 断点续答：查询 Google Sheets 已完成条数
-            completed_count = 0
-            sheet, err = init_google_sheets_once()
-            if not err and sheet:
-                try:
-                    records = sheet.get_all_records()
-                    completed_count = sum(1 for r in records if str(r.get("doctor_id")) == str(doctor_id))
-                except Exception:
-                    try:
-                        col_vals = sheet.col_values(1)
-                        completed_count = col_vals.count(doctor_id)
-                    except:
-                        completed_count = 0
-            
-            st.session_state.current_idx = min(completed_count, TEST_COUNT)
-
+        with st.spinner("正在加载测试病例..."):
             df, err = load_gold_data_cached()
             if err:
                 st.error(err)
@@ -414,17 +375,16 @@ def test_step():
 
     st.markdown("### 一、独立诊断")
     with st.form(f"initial_diagnosis_form_{idx}"):
-        t1 = st.radio(
+        t1 = st.selectbox(
             "首选诊断结果",
             ["请选择"] + ALL_CLASSES,
             key=f"t1_{idx}",
-            horizontal=True,
             help="请选择你认为最可能的诊断结果（必填）"
         )
         t2_opt = ["无"] + [x for x in ALL_CLASSES if x != t1]
-        t2 = st.radio("第二诊断结果（选做）", t2_opt, key=f"t2_{idx}", horizontal=True)
+        t2 = st.selectbox("第二诊断结果（选做）", t2_opt, key=f"t2_{idx}")
         t3_opt = ["无"] + [x for x in ALL_CLASSES if x not in [t1, t2]]
-        t3 = st.radio("第三诊断结果（选做）", t3_opt, key=f"t3_{idx}", horizontal=True)
+        t3 = st.selectbox("第三诊断结果（选做）", t3_opt, key=f"t3_{idx}")
         conf_i = st.slider(
             "对本次诊断的信心值（1-10分）",
             1, 10, 5,
@@ -532,15 +492,13 @@ def test_step():
                     act = st.radio(
                         "AI未出现在你的前三诊断中，你的选择是：",
                         ["坚持原诊断", "替换为首选（Top1）", "加入作为第四诊断"],
-                        key=f"act_{idx}",
-                        horizontal=True
+                        key=f"act_{idx}"
                     )
                 else:
                     act = st.radio(
                         "最终决策选择",
                         ["坚持原诊断", "替换为首选（Top1）"],
-                        key=f"act_{idx}",
-                        horizontal=True
+                        key=f"act_{idx}"
                     )
 
                 final4 = "无"
@@ -680,7 +638,7 @@ def result_step():
         with col1:
             st.metric("初始准确率", f"{initial_acc:.1f}%")
         with col2:
-            st.metric("最终诊断率", f"{final_acc:.1f}%", delta=f"{final_acc-initial_acc:.1f}%")
+            st.metric("最终准确率", f"{final_acc:.1f}%", delta=f"{final_acc-initial_acc:.1f}%")
         with col3:
             st.metric("采纳AI次数", len(ai_used))
 
