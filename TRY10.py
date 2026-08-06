@@ -79,20 +79,12 @@ h1 a, h2 a, h3 a, h4 a, h5 a, h6 a {
     display: none !important;
 }
 
-.streamlit-footer-mask {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    width: 100%;
-    height: 45px;
-    background-color: #F0F4F8;
-    z-index: 999999;
-    pointer-events: none;
-}
 
 /* Prevent virtual keyboard pop-ups on mobile select boxes */
 div[data-baseweb="select"] input {
     caret-color: transparent !important;
+    pointer-events: none !important;
+    user-select: none !important;
 }
 
 div[data-baseweb="select"], .stSelectbox, .stSlider {
@@ -196,7 +188,16 @@ div[data-baseweb="slider"] {
     color: #1a1a1a;
 }
 </style>
-<div class="streamlit-footer-mask"></div>
+
+""", unsafe_allow_html=True)
+
+# Mobile selectbox keyboard prevention
+st.markdown("""
+<script>
+document.querySelectorAll('div[data-baseweb="select"] input').forEach(function(el){
+    el.setAttribute('readonly','true');
+});
+</script>
 """, unsafe_allow_html=True)
 
 # Performance optimization configuration
@@ -642,7 +643,7 @@ def test_step():
     compressed_img = compress_image(img_url)
     
     # Native Streamlit image component: responsive, hover zoom on desktop, pinch-to-zoom on mobile browser
-    st.image(compressed_img, use_column_width=True)
+    st.image(compressed_img, use_container_width=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
