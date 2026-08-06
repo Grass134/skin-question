@@ -90,6 +90,7 @@ h1 a, h2 a, h3 a, h4 a, h5 a, h6 a {
     pointer-events: none;
 }
 
+/* Prevent virtual keyboard pop-ups on mobile select boxes */
 div[data-baseweb="select"] input {
     caret-color: transparent !important;
 }
@@ -98,7 +99,7 @@ div[data-baseweb="select"], .stSelectbox, .stSlider {
     width: 100% !important;
 }
 
-/* === 3. SCI-Paper UI Components (Cards & Header Blocks) === */
+/* === 3. SCI-Paper UI Components (Cards & Color Blocks) === */
 .card-container {
     background-color: #FFFFFF;
     border-radius: 12px;
@@ -108,19 +109,40 @@ div[data-baseweb="select"], .stSelectbox, .stSlider {
     border: 1px solid #E2E8F0;
 }
 
-.header-block {
+/* Main Title Color Block: Deep Blue Background with White Bold Text */
+.main-header-block {
     background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%);
-    color: #FFFFFF;
-    padding: 12px 18px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 16px;
+    color: #FFFFFF !important;
+    padding: 16px 20px;
+    border-radius: 10px;
+    font-weight: 700;
+    font-size: 20px;
     margin-bottom: 20px;
     display: flex;
     align-items: center;
+    gap: 12px;
+    box-shadow: 0 4px 6px rgba(30, 58, 138, 0.2);
+}
+.main-header-block * {
+    color: #FFFFFF !important;
+}
+
+/* Module Title Color Block: Light Blue Background with Dark Blue Text */
+.header-block {
+    background-color: #E0F2FE;
+    color: #1E3A8A !important;
+    padding: 12px 18px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 15px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
     gap: 10px;
-    letter-spacing: -0.2px;
-    box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
+    border-left: 4px solid #2563EB;
+}
+.header-block * {
+    color: #1E3A8A !important;
 }
 
 /* === 4. Button Styling Upgrades === */
@@ -145,17 +167,6 @@ div.stButton > button:hover, div.stFormSubmitButton > button:hover {
 
 div.stButton > button:active, div.stFormSubmitButton > button:active {
     transform: scale(0.98);
-}
-
-/* Secondary / Back button styling */
-div.stButton.secondary-btn > button {
-    background-color: #F3F4F6 !important;
-    color: #374151 !important;
-    border: 1px solid #D1D5DB !important;
-}
-div.stButton.secondary-btn > button:hover {
-    background-color: #E5E7EB !important;
-    color: #1F2937 !important;
 }
 
 /* === 5. Slider Customization === */
@@ -273,7 +284,7 @@ def init_google_sheets_once():
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         except KeyError:
             if not os.path.exists(LOCAL_GOOGLE_CREDENTIALS_FILE):
-                return None, "❌ Credentials file google_credentials.json not found"
+                return None, "Credentials file google_credentials.json not found"
             creds = ServiceAccountCredentials.from_json_keyfile_name(LOCAL_GOOGLE_CREDENTIALS_FILE, scope)
 
         client = gspread.authorize(creds)
@@ -296,9 +307,9 @@ def init_google_sheets_once():
         return sheet, None
 
     except gspread.exceptions.SpreadsheetNotFound:
-        return None, f"❌ Spreadsheet not found: {GOOGLE_SHEET_NAME}"
+        return None, f"Spreadsheet not found: {GOOGLE_SHEET_NAME}"
     except Exception as e:
-        return None, f"❌ Google Sheets initialization failed: {str(e)}"
+        return None, f"Google Sheets initialization failed: {str(e)}"
 
 # === Session State Initialization ===
 def init_session_state():
@@ -319,7 +330,6 @@ def init_session_state():
         "doctor_id": "",
         "ai_same_as_initial": False,
         "answered_image_ids": [],
-        "show_lightbox": False,
     }
     for k, v in default_states.items():
         if k not in st.session_state:
@@ -406,10 +416,10 @@ def save_results_to_gs():
 
         try:
             sheet.append_rows(rows)
-            st.success("✅ Successfully saved records")
+            st.success("Successfully saved records")
             return True
         except Exception as e:
-            st.error(f"❌ Write failed: {str(e)}")
+            st.error(f"Write failed: {str(e)}")
             return False
 
 # === Single Question State Reset ===
@@ -425,7 +435,6 @@ def reset_test_state():
     st.session_state.time_baseline = 0
     st.session_state.ai_same_as_initial = False
     st.session_state.question_start = None
-    st.session_state.show_lightbox = False
 
 # === Image Compression ===
 def compress_image(image_url):
@@ -503,8 +512,14 @@ def grouped_selectbox(label, options_list, key, help_text=None, placeholder="Sel
 
 # === Doctor Profile Page ===
 def profile_step():
+    st.markdown("""
+    <div class="main-header-block">
+        <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg>
+        AI-Assisted Dermatological Diagnosis Research Survey
+    </div>
+    """, unsafe_allow_html=True)
+
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
-    st.markdown("# AI-Assisted Dermatological Diagnosis Research Survey")
     st.markdown("""
 Dear Doctor:
 Thank you for taking time out of your busy clinical schedule to participate in this survey!
@@ -605,8 +620,12 @@ def test_step():
 
     # Progress & Title Card
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
-    st.markdown(f"### Case Diagnosis - Question {idx+1} of {TEST_COUNT}")
-    st.markdown(f"**Case {idx+1} / 10**")
+    st.markdown(f"""
+    <div class="main-header-block">
+        <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path></svg>
+        Case Diagnosis - Question {idx+1} of {TEST_COUNT}
+    </div>
+    """, unsafe_allow_html=True)
     st.progress((idx+1)/TEST_COUNT)
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -622,22 +641,8 @@ def test_step():
     img_url = get_image_url_cached(img_id)
     compressed_img = compress_image(img_url)
     
-    st.image(compressed_img, use_container_width=True)
-
-    # Lightbox Modal Integration via st.components.v1.html & Custom Button
-    if st.button("🔍 View Full Resolution"):
-        st.session_state.show_lightbox = True
-
-    if st.session_state.get("show_lightbox", False):
-        lightbox_html = f"""
-        <div id="custom-lightbox" style="position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.85);z-index:999999;display:flex;justify-content:center;align-items:center;cursor:pointer;" onclick="document.getElementById('custom-lightbox').style.display='none';">
-            <div style="position:relative; max-width:90%; max-height:90%;" onclick="event.stopPropagation();">
-                <img src="{img_url}" style="width:100%; height:auto; max-height:85vh; border-radius:8px; object-fit:contain; box-shadow: 0 10px 25px rgba(0,0,0,0.5);" />
-                <button onclick="document.getElementById('custom-lightbox').style.display='none';" style="position:absolute;top:-15px;right:-15px;background:#DC2626;color:white;border:none;border-radius:50%;width:36px;height:36px;font-size:18px;cursor:pointer;font-weight:bold;">&times;</button>
-            </div>
-        </div>
-        """
-        st.components.v1.html(lightbox_html, height=0)
+    # Native Streamlit image component: responsive, hover zoom on desktop, pinch-to-zoom on mobile browser
+    st.image(compressed_img, use_column_width=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -814,7 +819,7 @@ def test_step():
         else:
             st.markdown(f"""
             <div class="custom-warning-box">
-                <b>⚠️ Your diagnosis differs from the AI recommendation.</b><br>
+                <b>Your diagnosis differs from the AI recommendation.</b><br>
                 Yours: <b>{init1}</b> &nbsp;|&nbsp; AI suggests: <b>{ai_lbl}</b>
             </div>
             """, unsafe_allow_html=True)
@@ -970,7 +975,12 @@ def test_step():
 # === Result Page ===
 def result_step():
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
-    st.markdown("# Test Completed")
+    st.markdown("""
+    <div class="main-header-block">
+        <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+        Test Completed
+    </div>
+    """, unsafe_allow_html=True)
     st.success(f"Your Test ID: {st.session_state.doctor_id}")
     st.info("All data has been successfully written to Google Sheets. You can check the complete records in the spreadsheet.")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -979,7 +989,12 @@ def result_step():
         df = pd.DataFrame(st.session_state.user_results)
 
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
-        st.markdown("### Diagnostic Accuracy Comparison")
+        st.markdown("""
+        <div class="header-block">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+            Diagnostic Accuracy Comparison
+        </div>
+        """, unsafe_allow_html=True)
         initial_acc = df["is_initial_top1_correct"].mean() * 100
         final_acc = df["is_final_top1_correct"].mean() * 100
 
@@ -991,7 +1006,12 @@ def result_step():
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
-        st.markdown("### AI Adoption Effectiveness Analysis")
+        st.markdown("""
+        <div class="header-block">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+            AI Adoption Effectiveness Analysis
+        </div>
+        """, unsafe_allow_html=True)
         ai_used = df[df["use_ai"] == 1]
         ai_not_used = df[df["use_ai"] == 0]
 
@@ -1007,7 +1027,12 @@ def result_step():
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
-        st.markdown("### Summary of Core Metrics")
+        st.markdown("""
+        <div class="header-block">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z"></path></svg>
+            Summary of Core Metrics
+        </div>
+        """, unsafe_allow_html=True)
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Initial Accuracy", f"{initial_acc:.1f}%")
