@@ -14,19 +14,19 @@ import random
 from io import BytesIO
 import datetime
 
-# === 核心配置 ===
+# === Core Configuration ===
 st.set_option('client.showErrorDetails', True)
-st.set_page_config(page_title="皮肤病AI辅助诊断研究", page_icon="🩺", layout="centered")
+st.set_page_config(page_title="AI-Assisted Dermatological Diagnosis Research", page_icon="🩺", layout="centered")
 
-# 全局CSS样式、纯白色底部遮罩、移动端禁止键盘弹出优化及提交按钮美化
+# Global CSS styles, pure white bottom mask, mobile keyboard optimization, and button styling
 st.markdown("""
 <style>
-/* 页面背景色设为纯白 */
+/* Set page background to pure white */
 .stApp {
     background-color: #FFFFFF !important;
 }
 
-/* 纯白色固定底部遮罩，遮挡微信端残留的底部红色 Hosted with Streamlit 横幅 */
+/* Pure white fixed bottom mask to cover the residual Streamlit banner in WeChat */
 .streamlit-footer-mask {
     position: fixed;
     bottom: 0;
@@ -38,12 +38,12 @@ st.markdown("""
     pointer-events: none;
 }
 
-/* 禁用下拉框自带搜索输入及手机端点击唤起输入法键盘 */
+/* Disable dropdown built-in search input and mobile keyboard popup */
 div[data-baseweb="select"] input {
     caret-color: transparent !important;
 }
 
-/* 全局美化所有提交与主要操作按钮 */
+/* Global styling for all submission and primary action buttons */
 div.stButton > button, div.stFormSubmitButton > button {
     background-color: #E63946 !important;
     color: #FFFFFF !important;
@@ -62,50 +62,50 @@ div.stButton > button:hover, div.stFormSubmitButton > button:hover {
 <div class="streamlit-footer-mask"></div>
 """, unsafe_allow_html=True)
 
-# 性能优化配置
+# Performance optimization configuration
 REQUEST_TIMEOUT = 2
 CACHE_TTL = 3600
 IMAGE_COMPRESS_WIDTH = 600
 IMAGE_QUALITY = 85
 
-# GitHub 配置
+# GitHub Configuration
 GITHUB_USERNAME = "grass134"
 GITHUB_REPO = "skin-question"
 GOLD_TXT = f"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/main/boosted_final_detail4.UTF-8.txt"
 
-# ========== Google Sheets 强制开启配置 ==========
-GOOGLE_SHEET_NAME = "皮肤诊断数据"
+# ========== Google Sheets Configuration ==========
+GOOGLE_SHEET_NAME = "Skin Diagnosis Data"
 LOCAL_GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
 
-# GitHub 图片路径
+# GitHub Image Folder
 GITHUB_IMAGE_FOLDER = "experiment_pool"
 GITHUB_BRANCH = "main"
 
-# 疾病标签
+# Disease Labels
 DISEASE_LABELS = {
-    "MEL": "黑色素瘤", "NV": "痣（色素痣）", "BCC": "基底细胞癌", "AK": "光化性角化病",
-    "BKL": "良性角化病（脂溢性角化等）", "DF": "皮肤纤维瘤", "VASC": "血管病变", "SCC": "鳞状细胞癌",
-    "Vitiligo": "白癜风", "Pityrasis-Alba": "白色糠疹", "Psoriasis": "银屑病", "UNK": "未知类别"
+    "MEL": "Melanoma", "NV": "Nevus (Melanocytic Nevus)", "BCC": "Basal Cell Carcinoma", "AK": "Actinic Keratosis",
+    "BKL": "Benign Keratosis (e.g., Seborrheic Keratosis)", "DF": "Dermatofibroma", "VASC": "Vascular Lesion", "SCC": "Squamous Cell Carcinoma",
+    "Vitiligo": "Vitiligo", "Pityrasis-Alba": "Pityriasis Alba", "Psoriasis": "Psoriasis", "UNK": "Unknown Category"
 }
 ALL_CLASSES = list(DISEASE_LABELS.values())
 TEST_COUNT = 10
 
-# === 去重函数（保留顺序，排除"无"）===
+# === Deduplication Function (Preserve order, exclude "N/A") ===
 def deduplicate_preserve_order(lst):
     seen = set()
     result = []
     for x in lst:
-        if x not in seen and x != "无":
+        if x not in seen and x != "N/A":
             seen.add(x)
             result.append(x)
     return result
 
-# === 东八区时间获取函数 ===
+# === Get CST Time Function ===
 def get_cst_time():
     cst_tz = datetime.timezone(datetime.timedelta(hours=8))
     return datetime.datetime.now(cst_tz).strftime("%Y-%m-%d %H:%M:%S")
 
-# === Google Sheets 初始化 ===
+# === Google Sheets Initialization ===
 @st.cache_resource(ttl=CACHE_TTL, show_spinner=False)
 def init_google_sheets_once():
     try:
@@ -121,7 +121,7 @@ def init_google_sheets_once():
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         except KeyError:
             if not os.path.exists(LOCAL_GOOGLE_CREDENTIALS_FILE):
-                return None, "❌ 未找到凭证文件 google_credentials.json"
+                return None, "❌ Credentials file google_credentials.json not found"
             creds = ServiceAccountCredentials.from_json_keyfile_name(LOCAL_GOOGLE_CREDENTIALS_FILE, scope)
 
         client = gspread.authorize(creds)
@@ -144,11 +144,11 @@ def init_google_sheets_once():
         return sheet, None
 
     except gspread.exceptions.SpreadsheetNotFound:
-        return None, f"❌ 未找到表格：{GOOGLE_SHEET_NAME}"
+        return None, f"❌ Spreadsheet not found: {GOOGLE_SHEET_NAME}"
     except Exception as e:
-        return None, f"❌ Google Sheets 初始化失败：{str(e)}"
+        return None, f"❌ Google Sheets initialization failed: {str(e)}"
 
-# === 会话状态初始化 ===
+# === Session State Initialization ===
 def init_session_state():
     default_states = {
         "step": "profile",
@@ -158,7 +158,7 @@ def init_session_state():
         "test_set": None,
         "doctor_info": {},
         "ai_suggestion": {},
-        "initial_top": ["请选择", "无", "无"],
+        "initial_top": ["Please Select", "N/A", "N/A"],
         "initial_conf": 5,
         "final_top1": "", "final_top2": "", "final_top3": "", "final_top4": "",
         "final_conf": 5,
@@ -172,7 +172,7 @@ def init_session_state():
         if k not in st.session_state:
             st.session_state[k] = v
 
-# === 测试集加载 ===
+# === Test Set Loading ===
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def load_gold_data_cached():
     try:
@@ -182,27 +182,24 @@ def load_gold_data_cached():
         req_cols = ["image_id", "Top1_预测", "真实病名"]
         missing = [c for c in req_cols if c not in df.columns]
         if missing:
-            return None, f"缺失字段：{missing}"
+            return None, f"Missing fields: {missing}"
 
-        df["true_cn"] = df["真实病名"].map(DISEASE_LABELS).fillna("未知")
-        df["ai_cn"] = df["Top1_预测"].map(DISEASE_LABELS).fillna("未知")
+        df["true_cn"] = df["真实病名"].map(DISEASE_LABELS).fillna("Unknown")
+        df["ai_cn"] = df["Top1_预测"].map(DISEASE_LABELS).fillna("Unknown")
         df["ai_correct"] = df["true_cn"] == df["ai_cn"]
-        df = df[(df["true_cn"] != "未知") & (df["ai_cn"] != "未知")]
+        df = df[(df["true_cn"] != "Unknown") & (df["ai_cn"] != "Unknown")]
         return df, None
     except Exception as e:
-        return None, f"加载失败：{str(e)}"
+        return None, f"Loading failed: {str(e)}"
 
-# === 修改位置一：病例随机抽取规则优化（排除已作答病例，确保AI正误配比符合6~7：3~4要求）===
-# 注：原有代码抽样配比（6个正确，4个错误）符合预设的6~7例正确、3~4例错误要求。
-# 修改后的样本筛选逻辑：从剩余未作答样本池中抽取，严格排除已作答病例ID，数据集总样本量550张。
+# === Random Case Sampling Rule Optimization (Excludes answered cases, ensures AI correct/incorrect ratio meets 6-7:3-4 requirement) ===
 def load_balanced_test_set(df, completed_image_ids=None):
     if completed_image_ids is None:
         completed_image_ids = []
     
-    # 排除该医生已经完成作答的病例ID
     available_df = df[~df["image_id"].isin(completed_image_ids)]
     if len(available_df) < TEST_COUNT:
-        available_df = df  # 若剩余不足10题则重置全量池
+        available_df = df  
         
     correct_sample = pd.DataFrame()
     incorrect_sample = pd.DataFrame()
@@ -226,16 +223,16 @@ def load_balanced_test_set(df, completed_image_ids=None):
     test_set = pd.concat([correct_sample, incorrect_sample]).sample(frac=1).reset_index(drop=True)
     return test_set.head(TEST_COUNT)
 
-# === 强制保存到 Sheets ===
+# === Save to Sheets ===
 def save_results_to_gs():
-    with st.spinner("正在保存数据到 Google Sheets..."):
+    with st.spinner("Saving data to Google Sheets..."):
         sheet, err = init_google_sheets_once()
         if err:
             st.error(err)
             return False
 
         if not st.session_state.user_results:
-            st.warning("无结果可保存")
+            st.warning("No results available to save")
             return False
 
         rows = []
@@ -256,27 +253,27 @@ def save_results_to_gs():
 
         try:
             sheet.append_rows(rows)
-            st.success(f"✅ 已保存 {len(rows)} 条记录")
+            st.success(f"✅ Successfully saved {len(rows)} records")
             return True
         except Exception as e:
-            st.error(f"❌ 写入失败：{str(e)}")
+            st.error(f"❌ Write failed: {str(e)}")
             return False
 
-# === 单题状态重置 ===
+# === Single Question State Reset ===
 def reset_test_state():
     st.session_state.show_ai = False
-    st.session_state.initial_top = ["请选择", "无", "无"]
+    st.session_state.initial_top = ["Please Select", "N/A", "N/A"]
     st.session_state.initial_conf = 5
     st.session_state.final_top1 = ""
     st.session_state.final_top2 = ""
     st.session_state.final_top3 = ""
-    st.session_state.final_top4 = "无"
+    st.session_state.final_top4 = "N/A"
     st.session_state.final_conf = 5
     st.session_state.time_baseline = 0
     st.session_state.ai_same_as_initial = False
     st.session_state.question_start = None
 
-# === 图片压缩 ===
+# === Image Compression ===
 def compress_image(image_url):
     try:
         r = requests.get(image_url, timeout=REQUEST_TIMEOUT)
@@ -308,7 +305,7 @@ def compress_image(image_url):
             buf.seek(0)
             return buf
 
-# === 图片URL获取 ===
+# === Image URL Retrieval ===
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def get_image_url_cached(image_id):
     clean_id = re.sub(r"\.(jpg|png)$", "", image_id)
@@ -335,44 +332,44 @@ def get_image_url_cached(image_id):
     fallback = random.choice(["ISIC_0034334", "ISIC_0034402", "ISIC_0034411"])
     return f"{base}{GITHUB_IMAGE_FOLDER}/{fallback}.jpg"
 
-# === 医生信息页 ===
+# === Doctor Profile Page ===
 def profile_step():
-    st.title("🩺 皮肤病AI辅助诊断研究问卷")
+    st.title("🩺 AI-Assisted Dermatological Diagnosis Research Survey")
     st.markdown("""
-亲爱的医生：
-感恩您在忙碌的临床工作中，抽出时间参与本次调研～
-本次测试共 10 道选择题，预计3-7分钟完成。您的每一次认真判断、每一个真实反馈，都承载着对医学研究的支持与责任。
-我们会妥善保管您的所有数据（严格匿名），让您的专业经验发挥更大价值。
-再次向您致以最诚挚的感谢，祝您一切顺遂！
+Dear Doctor:
+Thank you for taking time out of your busy clinical schedule to participate in this survey!
+This test consists of 10 multiple-choice questions and takes about 3-7 minutes to complete. Every careful judgment and genuine feedback from you carries great value and responsibility for medical research.
+We will properly and strictly anonymize all your data, allowing your professional experience to make a greater impact.
+Once again, our sincere gratitude to you, and we wish you all the best!
 """)
-    st.subheader("第一步：医生基本信息采集（匿名）")
+    st.subheader("Step 1: Basic Information Collection (Anonymous)")
     with st.form("profile_form"):
         hospital_level = st.selectbox(
-            "所在医院等级",
-            ["三甲医院专科医生", "二级医院专科医生", "社区医院/实习生"],
-            help="请选择你的执业医院等级"
+            "Hospital Level",
+            ["Tertiary Grade A Hospital Specialist", "Secondary Hospital Specialist", "Community Hospital / Intern"],
+            help="Please select your practicing hospital level"
         )
         work_years = st.selectbox(
-            "从事皮肤科工作年限",
-            ["≤5年", "5-10年", "10-15年", ">15年", "无临床经验（实习生）"],
-            help="请选择你的皮肤科工作年限"
+            "Years of Dermatological Practice",
+            ["<=5 years", "5-10 years", "10-15 years", ">15 years", "No Clinical Experience (Intern)"],
+            help="Please select your years of experience in dermatology"
         )
         daily_patients = st.selectbox(
-            "日均接诊皮肤病患者数量",
-            ["≤15例", "15-30例", ">30例", "无接诊经验"],
-            help="请选择你的日均接诊量范围"
+            "Average Daily Dermatological Patients",
+            ["<=15 cases", "15-30 cases", ">30 cases", "No Outpatient Experience"],
+            help="Please select your average daily patient volume range"
         )
         prior_ai_trust = st.selectbox(
-            "对AI辅助诊断的初始信任度（1-10分）",
+            "Initial Trust in AI-Assisted Diagnosis (Score 1-10)",
             options=list(range(1, 11)),
             index=4,
-            help="1分：完全不信任，10分：完全信任"
+            help="1: Completely distrust, 10: Completely trust"
         )
 
-        submit_btn = st.form_submit_button("✅ 提交信息，开始测试")
+        submit_btn = st.form_submit_button("✅ Submit Information and Start Test")
 
     if submit_btn:
-        prefix = "A" if "三甲" in hospital_level else "B" if "二级" in hospital_level else "C"
+        prefix = "A" if "Tertiary" in hospital_level else "B" if "Secondary" in hospital_level else "C"
         doctor_id = f"{prefix}_DR_{uuid.uuid4().hex[:6].upper()}"
         st.session_state.doctor_id = doctor_id
 
@@ -384,12 +381,12 @@ def profile_step():
             "prior_ai_trust": prior_ai_trust
         }
 
-        with st.spinner("正在加载测试病例..."):
+        with st.spinner("Loading test cases..."):
             df, err = load_gold_data_cached()
             if err:
                 st.error(err)
                 return
-            if work_years == ">15年" and len(df[~df["ai_correct"]]) >= 2:
+            if work_years == ">15 years" and len(df[~df["ai_correct"]]) >= 2:
                 add_samples = df[~df["ai_correct"]].sample(2)
                 df = pd.concat([df, add_samples]).drop_duplicates()
             st.session_state.test_set = load_balanced_test_set(df, st.session_state.answered_image_ids)
@@ -397,17 +394,16 @@ def profile_step():
         st.session_state.step = "test"
         st.rerun()
 
-# === 测试答题页 ===
+# === Test Question Page ===
 def test_step():
     ts = st.session_state.test_set
     if ts is None or ts.empty:
-        st.error("测试集加载失败，请刷新页面重试")
+        st.error("Failed to load test set, please refresh and try again")
         return
 
     idx = st.session_state.current_idx
     if idx >= TEST_COUNT:
         save_results_to_gs()
-        # 清除本地存档状态
         st.components.v1.html("""
             <script>
                 try {
@@ -424,41 +420,40 @@ def test_step():
     ai_lbl = cur["ai_cn"]
     ai_ok = ai_lbl == truth
 
-    # 题目加载时立即开始计时
     if st.session_state.question_start is None:
         st.session_state.question_start = time.time()
 
-    st.title(f"📷 病例诊断 - 第 {idx+1}/{TEST_COUNT} 题")
+    st.title(f"📷 Case Diagnosis - Question {idx+1} of {TEST_COUNT}")
     st.progress((idx+1)/TEST_COUNT)
 
-    st.subheader("皮损图像")
+    st.subheader("Lesion Image")
     img_url = get_image_url_cached(img_id)
     compressed_img = compress_image(img_url)
     st.image(compressed_img, use_container_width=True)
 
-    st.markdown("### 一、独立诊断")
+    st.markdown("### I. Independent Diagnosis")
     with st.form(f"initial_diagnosis_form_{idx}"):
         t1 = st.selectbox(
-            "首选诊断结果",
-            ["请选择"] + ALL_CLASSES,
+            "Primary Diagnosis",
+            ["Please Select"] + ALL_CLASSES,
             key=f"t1_{idx}",
-            help="请选择你认为最可能的诊断结果（必填）"
+            help="Please select your most likely diagnosis (Required)"
         )
-        t2_opt = ["无"] + [x for x in ALL_CLASSES if x != t1]
-        t2 = st.selectbox("第二诊断结果", t2_opt, key=f"t2_{idx}")
-        t3_opt = ["无"] + [x for x in ALL_CLASSES if x not in [t1, t2]]
-        t3 = st.selectbox("第三诊断结果", t3_opt, key=f"t3_{idx}")
+        t2_opt = ["N/A"] + [x for x in ALL_CLASSES if x != t1]
+        t2 = st.selectbox("Secondary Diagnosis", t2_opt, key=f"t2_{idx}")
+        t3_opt = ["N/A"] + [x for x in ALL_CLASSES if x not in [t1, t2]]
+        t3 = st.selectbox("Tertiary Diagnosis", t3_opt, key=f"t3_{idx}")
         conf_i = st.slider(
-            "对本次诊断的信心值（1-10分）",
+            "Confidence in This Diagnosis (Score 1-10)",
             1, 10, 5,
             key=f"ci_{idx}",
-            help="1分：完全不确定，10分：完全确定"
+            help="1: Completely uncertain, 10: Completely certain"
         )
 
-        submit_initial = st.form_submit_button("🔍 提交诊断，查看AI建议")
+        submit_initial = st.form_submit_button("🔍 Submit Diagnosis & View AI Recommendation")
         if submit_initial:
-            if t1 == "请选择":
-                st.error("请至少选择首选诊断结果后提交")
+            if t1 == "Please Select":
+                st.error("Please select at least the primary diagnosis before submitting")
             else:
                 time_baseline = round(time.time() - st.session_state.question_start, 2)
                 st.session_state.time_baseline = time_baseline
@@ -471,21 +466,21 @@ def test_step():
                 st.rerun()
 
     if st.session_state.show_ai:
-        st.markdown("### 二、AI辅助决策")
-        st.info(f"🤖 AI辅助诊断建议：**{ai_lbl}**")
+        st.markdown("### II. AI-Assisted Decision Making")
+        st.info(f"🤖 AI Diagnostic Recommendation: **{ai_lbl}**")
 
         init1, init2, init3 = st.session_state.initial_top
         same_with_ai = init1 == ai_lbl
 
         if same_with_ai:
-            st.success(f"✅ 你的初始诊断与AI建议一致：{init1}")
+            st.success(f"✅ Your initial diagnosis matches the AI recommendation: {init1}")
             with st.form(f"final_decision_form_{idx}"):
                 final_conf = st.slider(
-                    "最终诊断信心值（1-10分）",
+                    "Final Diagnosis Confidence (Score 1-10)",
                     1, 10, st.session_state.initial_conf,
                     key=f"cf_{idx}"
                 )
-                submit_final = st.form_submit_button("✅ 确认最终诊断，进入下一题")
+                submit_final = st.form_submit_button("✅ Confirm Final Diagnosis & Proceed to Next Question")
                 if submit_final:
                     t_post = round(time.time() - st.session_state.question_start, 2)
                     gain = final_conf - st.session_state.initial_conf
@@ -495,18 +490,18 @@ def test_step():
 
                     final_list = deduplicate_preserve_order([init1, init2, init3])
                     while len(final_list) < 3:
-                        final_list.append("无")
+                        final_list.append("N/A")
                     final_list = final_list[:3]
                     final1, final2, final3 = final_list
-                    final4 = "无"
+                    final4 = "N/A"
 
                     is_final_top3_correct = truth in [final1, final2, final3]
                     is_final_top4_correct = truth in [final1, final2, final3, final4]
 
                     if ini_ok and fin_ok:
-                        path, misled, rescued = "同对坚持", False, False
+                        path, misled, rescued = "Consistent & Maintained", False, False
                     else:
-                        path, misled, rescued = "错上改错", False, False
+                        path, misled, rescued = "Persisted Incorrect", False, False
 
                     result = {
                         **st.session_state.doctor_info,
@@ -520,8 +515,8 @@ def test_step():
                         "initial_confidence": st.session_state.initial_conf,
                         "is_initial_top1_correct": ini_ok,
                         "is_initial_top3_correct": truth in [init1, init2, init3],
-                        "interaction_type": "一致",
-                        "action_taken": "无需选择（初始与AI一致）",
+                        "interaction_type": "Consistent",
+                        "action_taken": "No Action Needed (Initial matches AI)",
                         "use_ai": use_ai,
                         "final_top1": final1,
                         "final_top2": final2,
@@ -547,9 +542,6 @@ def test_step():
                     reset_test_state()
                     st.session_state.current_idx += 1
                     
-                    # === 修改位置二：适配微信浏览器的断点续答与本地存档逻辑 ===
-                    # 注：受微信环境限制，完全关闭微信或清除网页缓存会丢失进度。
-                    # 同步记录当前作答进度序号、已作答病例编号及全部填写答案至浏览器 sessionStorage
                     progress_data = {
                         "current_idx": st.session_state.current_idx,
                         "answered_image_ids": st.session_state.answered_image_ids,
@@ -569,46 +561,46 @@ def test_step():
                     st.rerun()
 
         else:
-            st.warning(f"⚠️ 你的初始诊断（{init1}）与AI建议（{ai_lbl}）不一致")
+            st.warning(f"⚠️ Your initial diagnosis ({init1}) differs from the AI recommendation ({ai_lbl})")
             ai_in_top3 = ai_lbl in [init1, init2, init3]
 
             with st.form(f"final_decision_form_{idx}"):
                 if not ai_in_top3:
                     act = st.radio(
-                        "AI未出现在你的前三诊断中，你的选择是：",
-                        ["坚持原诊断", "替换为首选（Top1）", "加入作为第四诊断"],
+                        "AI suggestion is not in your top three diagnoses. Your choice is:",
+                        ["Maintain Original Diagnosis", "Replace as Primary (Top 1)", "Add as 4th Diagnosis"],
                         key=f"act_{idx}"
                     )
                 else:
                     act = st.radio(
-                        "最终决策选择",
-                        ["坚持原诊断", "替换为首选（Top1）"],
+                        "Final Decision Choice",
+                        ["Maintain Original Diagnosis", "Replace as Primary (Top 1)"],
                         key=f"act_{idx}"
                     )
 
-                final4 = "无"
+                final4 = "N/A"
                 use_ai = 0
 
-                if act == "坚持原诊断":
+                if act == "Maintain Original Diagnosis":
                     final_list = deduplicate_preserve_order([init1, init2, init3])
                     while len(final_list) < 3:
-                        final_list.append("无")
+                        final_list.append("N/A")
                     final_list = final_list[:3]
                     final1, final2, final3 = final_list
 
-                elif act == "替换为首选（Top1）":
+                elif act == "Replace as Primary (Top 1)":
                     temp = [ai_lbl, init1, init2, init3]
                     final_list = deduplicate_preserve_order(temp)
                     while len(final_list) < 3:
-                        final_list.append("无")
+                        final_list.append("N/A")
                     final_list = final_list[:3]
                     final1, final2, final3 = final_list
                     use_ai = 1
 
-                elif act == "加入作为第四诊断":
+                elif act == "Add as 4th Diagnosis":
                     final_list = deduplicate_preserve_order([init1, init2, init3])
                     while len(final_list) < 3:
-                        final_list.append("无")
+                        final_list.append("N/A")
                     final_list = final_list[:3]
                     final1, final2, final3 = final_list
                     final4 = ai_lbl
@@ -617,7 +609,7 @@ def test_step():
                 else:
                     final_list = deduplicate_preserve_order([init1, init2, init3])
                     while len(final_list) < 3:
-                        final_list.append("无")
+                        final_list.append("N/A")
                     final_list = final_list[:3]
                     final1, final2, final3 = final_list
 
@@ -626,12 +618,12 @@ def test_step():
                 is_final_top4_correct = truth in [final1, final2, final3, final4]
 
                 final_conf = st.slider(
-                    "最终诊断信心值（1-10分）",
+                    "Final Diagnosis Confidence (Score 1-10)",
                     1, 10, st.session_state.initial_conf,
                     key=f"cf_{idx}"
                 )
 
-                submit_final = st.form_submit_button("✅ 确认最终诊断，进入下一题")
+                submit_final = st.form_submit_button("✅ Confirm Final Diagnosis & Proceed to Next Question")
                 if submit_final:
                     t_post = round(time.time() - st.session_state.question_start, 2)
                     gain = final_conf - st.session_state.initial_conf
@@ -639,13 +631,13 @@ def test_step():
                     fin_ok = is_final_top1_correct
 
                     if ini_ok and not fin_ok:
-                        path, misled, rescued = "误导", True, False
+                        path, misled, rescued = "Misled", True, False
                     elif not ini_ok and fin_ok:
-                        path, misled, rescued = "纠正", False, True
+                        path, misled, rescued = "Rescued", False, True
                     elif ini_ok and fin_ok:
-                        path, misled, rescued = "同对坚持", False, False
+                        path, misled, rescued = "Consistent & Maintained", False, False
                     else:
-                        path, misled, rescued = "错上改错", False, False
+                        path, misled, rescued = "Persisted Incorrect", False, False
 
                     result = {
                         **st.session_state.doctor_info,
@@ -660,7 +652,7 @@ def test_step():
                         "is_initial_top1_correct": ini_ok,
                         "is_initial_top3_correct": truth in [init1, init2, init3],
                         "ai_in_initial_top3": ai_in_top3,
-                        "interaction_type": "冲突",
+                        "interaction_type": "Conflict",
                         "action_taken": act,
                         "use_ai": use_ai,
                         "final_top1": final1,
@@ -687,8 +679,6 @@ def test_step():
                     reset_test_state()
                     st.session_state.current_idx += 1
 
-                    # === 修改位置二：适配微信浏览器的断点续答与本地存档逻辑 ===
-                    # 注：受微信环境限制，完全关闭微信或清除网页缓存会丢失进度。
                     progress_data = {
                         "current_idx": st.session_state.current_idx,
                         "answered_image_ids": st.session_state.answered_image_ids,
@@ -707,26 +697,26 @@ def test_step():
 
                     st.rerun()
 
-# === 结果页 ===
+# === Result Page ===
 def result_step():
-    st.title("📊 测试完成")
-    st.success(f"你的测试ID：{st.session_state.doctor_id}")
-    st.info("所有数据已成功写入 Google Sheets，可前往表格查看完整记录")
+    st.title("📊 Test Completed")
+    st.success(f"Your Test ID: {st.session_state.doctor_id}")
+    st.info("All data has been successfully written to Google Sheets. You can check the complete records in the spreadsheet.")
 
     if len(st.session_state.user_results) > 0:
         df = pd.DataFrame(st.session_state.user_results)
 
-        st.subheader("📈 诊断准确率对比")
+        st.subheader("📈 Diagnostic Accuracy Comparison")
         initial_acc = df["is_initial_top1_correct"].mean() * 100
         final_acc = df["is_final_top1_correct"].mean() * 100
 
         acc_data = pd.DataFrame({
-            "准确率（%）": [initial_acc, final_acc]
-        }, index=["初始诊断（无AI）", "最终诊断（AI辅助）"])
+            "Accuracy (%)": [initial_acc, final_acc]
+        }, index=["Initial Diagnosis (Without AI)", "Final Diagnosis (AI-Assisted)"])
 
         st.bar_chart(acc_data, color="#3498db", width="stretch")
 
-        st.subheader("💡 AI采纳效果分析")
+        st.subheader("💡 AI Adoption Effectiveness Analysis")
         ai_used = df[df["use_ai"] == 1]
         ai_not_used = df[df["use_ai"] == 0]
 
@@ -734,22 +724,22 @@ def result_step():
         ai_not_used_acc = ai_not_used["is_final_top1_correct"].mean() * 100 if len(ai_not_used) > 0 else 0
 
         ai_data = pd.DataFrame({
-            "准确率（%）": [ai_used_acc, ai_not_used_acc]
-        }, index=["采纳AI建议", "未采纳AI建议（含初始与AI一致）"])
+            "Accuracy (%)": [ai_used_acc, ai_not_used_acc]
+        }, index=["Adopted AI Recommendation", "Did Not Adopt AI Recommendation (Including initial match with AI)"])
 
         st.bar_chart(ai_data, color="#e74c3c", width="stretch")
-        st.caption(f"采纳AI建议：{len(ai_used)}题 | 未采纳AI建议：{len(ai_not_used)}题")
+        st.caption(f"Adopted AI: {len(ai_used)} questions | Did not adopt AI: {len(ai_not_used)} questions")
 
-        st.subheader("📊 核心指标汇总")
+        st.subheader("📊 Summary of Core Metrics")
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("初始准确率", f"{initial_acc:.1f}%")
+            st.metric("Initial Accuracy", f"{initial_acc:.1f}%")
         with col2:
-            st.metric("最终准确率", f"{final_acc:.1f}%", delta=f"{final_acc-initial_acc:.1f}%")
+            st.metric("Final Accuracy", f"{final_acc:.1f}%", delta=f"{final_acc-initial_acc:.1f}%")
         with col3:
-            st.metric("采纳AI次数", len(ai_used))
+            st.metric("AI Adoptions", len(ai_used))
 
-    if st.button("🔄 重新开始测试", type="primary"):
+    if st.button("🔄 Restart Test", type="primary"):
         init_session_state()
         st.components.v1.html("""
             <script>
@@ -761,21 +751,17 @@ def result_step():
         st.session_state.step = "profile"
         st.rerun()
 
-# === 主函数 ===
+# === Main Function ===
 def main():
     init_session_state()
 
-    # === 修改位置二：适配微信浏览器的断点续答与本地存档逻辑 ===
-    # 首次进入页面时，通过前端脚本检测本地 sessionStorage 是否有未完成存档，并提供选择交互
     if not st.session_state.get("checked_storage", False):
         st.session_state.checked_storage = True
-        # 渲染检查 sessionStorage 的组件并在界面提供【继续上次作答】/【全新开始】选项
         st.components.v1.html("""
             <script>
                 try {
                     const saved = sessionStorage.getItem("skin_survey_progress");
                     if (saved) {
-                        // 若检测到存档，可以通过URL参数或触发回传，这里我们在UI通过SessionState结合提示展示
                     }
                 } catch(e) {}
             </script>
