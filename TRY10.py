@@ -96,8 +96,8 @@ div[data-baseweb="select"], .stSelectbox, .stSlider {
     background-color: #FFFFFF;
     border-radius: 12px;
     padding: 24px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-    margin-bottom: 20px;
+    box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08);
+    margin-bottom: 16px;
     border: 1px solid #E2E8F0;
 }
 
@@ -109,7 +109,7 @@ div[data-baseweb="select"], .stSelectbox, .stSlider {
     border-radius: 10px;
     font-weight: 700;
     font-size: 20px;
-    margin-bottom: 20px;
+    margin-bottom: 16px;
     display: flex;
     align-items: center;
     gap: 12px;
@@ -187,6 +187,32 @@ div[data-baseweb="slider"] {
 .custom-warning-box b {
     color: #1a1a1a;
 }
+
+/* === Stage 2 Medical SaaS refinements === */
+.card-container {
+    border-radius: 12px !important;
+    overflow: visible !important;
+}
+.stMarkdown p, p, label, span {
+    line-height: 1.6 !important;
+}
+/* Remove accidental empty visual blocks */
+.element-container:has(.ghost-cleanup) {display:none !important;}
+/* Better chart spacing */
+div[data-testid="stVegaLiteChart"], div[data-testid="stArrowVegaLiteChart"] {
+    padding-bottom: 24px !important;
+}
+/* progress bar */
+div[data-testid="stProgressBar"] > div {
+    border-radius: 999px !important;
+    height: 10px !important;
+}
+/* selectbox category rows are intercepted in Python; keep native style */
+div[data-baseweb="select"] input {
+    pointer-events:none !important;
+    user-select:none !important;
+}
+
 </style>
 
 """, unsafe_allow_html=True)
@@ -506,9 +532,11 @@ def grouped_selectbox(label, options_list, key, help_text=None, placeholder="Sel
                 flat_options.append(d_name)
     
     selected = st.selectbox(label, flat_options, key=key, help=help_text)
-    if selected and selected.startswith("──"):
-        st.warning("Please select a valid disease category option, not a group header.")
+
+    # Category headers are visual separators only and cannot be used as diagnoses
+    if selected and selected.startswith("──") and selected.endswith("──"):
         return placeholder
+
     return selected
 
 # === Doctor Profile Page ===
@@ -1003,7 +1031,7 @@ def result_step():
             "Accuracy (%)": [initial_acc, final_acc]
         }, index=["Initial Diagnosis (Without AI)", "Final Diagnosis (AI-Assisted)"])
 
-        st.bar_chart(acc_data, color="#3498db", width="stretch")
+        st.bar_chart(acc_data, color="#3498db", width="stretch", height=400)
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -1023,7 +1051,7 @@ def result_step():
             "Accuracy (%)": [ai_used_acc, ai_not_used_acc]
         }, index=["Adopted AI Recommendation", "Did Not Adopt AI Recommendation (Including initial match with AI)"])
 
-        st.bar_chart(ai_data, color="#e74c3c", width="stretch")
+        st.bar_chart(ai_data, color="#e74c3c", width="stretch", height=400)
         st.caption(f"Adopted AI: {len(ai_used)} questions | Did not adopt AI: {len(ai_not_used)} questions")
         st.markdown('</div>', unsafe_allow_html=True)
 
