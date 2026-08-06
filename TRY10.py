@@ -174,6 +174,11 @@ div[data-baseweb="slider"] {
 }
 
 /* === 6. Warning Box Refinement === */
+.stPlotlyChart, div[data-testid="stVegaLiteChart"] {
+    min-height: 360px !important;
+    padding-bottom: 32px !important;
+}
+
 .custom-warning-box {
     background-color: #FFF8E1;
     border-left: 4px solid #FFA000;
@@ -533,8 +538,10 @@ def grouped_selectbox(label, options_list, key, help_text=None, placeholder="Sel
     
     selected = st.selectbox(label, flat_options, key=key, help=help_text)
 
-    # Category headers are visual separators only and cannot be used as diagnoses
+    # Category headers are visual separators only and can never be saved as values
     if selected and selected.startswith("──") and selected.endswith("──"):
+        # immediately reset Streamlit state value to placeholder
+        st.session_state[key] = placeholder
         return placeholder
 
     return selected
@@ -1031,7 +1038,7 @@ def result_step():
             "Accuracy (%)": [initial_acc, final_acc]
         }, index=["Initial Diagnosis (Without AI)", "Final Diagnosis (AI-Assisted)"])
 
-        st.bar_chart(acc_data, color="#3498db", width="stretch", height=400)
+        st.bar_chart(acc_data, color="#3498db", width="stretch", height=450)
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -1051,7 +1058,7 @@ def result_step():
             "Accuracy (%)": [ai_used_acc, ai_not_used_acc]
         }, index=["Adopted AI Recommendation", "Did Not Adopt AI Recommendation (Including initial match with AI)"])
 
-        st.bar_chart(ai_data, color="#e74c3c", width="stretch", height=400)
+        st.bar_chart(ai_data, color="#e74c3c", width="stretch", height=450)
         st.caption(f"Adopted AI: {len(ai_used)} questions | Did not adopt AI: {len(ai_not_used)} questions")
         st.markdown('</div>', unsafe_allow_html=True)
 
