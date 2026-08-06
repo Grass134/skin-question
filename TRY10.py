@@ -18,12 +18,12 @@ import datetime
 st.set_option('client.showErrorDetails', True)
 st.set_page_config(page_title="AI-Assisted Dermatological Diagnosis Research", page_icon="🩺", layout="centered")
 
-# Global CSS styles, mobile responsiveness, typography, buttons, warning boxes, and UI polish
+# Global CSS styles, SCI-paper modern UI, color blocks, card containers, and mobile optimization
 st.markdown("""
 <style>
 /* === 1. Global & Typography Styles === */
 .stApp {
-    background-color: #FFFFFF !important;
+    background-color: #F0F4F8 !important;
     color: #1a1a1a !important;
     font-family: Inter, Roboto, Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
     -webkit-font-smoothing: antialiased !important;
@@ -58,9 +58,6 @@ h2, h3 {
 @media (max-width: 768px) {
     h1 {
         font-size: 20px !important;
-        word-break: normal !important;
-        overflow-wrap: normal !important;
-        white-space: normal !important;
     }
     h2, h3 {
         font-size: 18px !important;
@@ -78,34 +75,55 @@ div[data-testid="stToolbar"] {display: none !important;}
 div[data-testid="stDecoration"] {display: none !important;}
 div[data-testid="stStatusWidget"] {display: none !important;}
 
-/* Hide markdown header anchor links */
 h1 a, h2 a, h3 a, h4 a, h5 a, h6 a {
     display: none !important;
 }
 
-/* Pure white fixed bottom mask */
 .streamlit-footer-mask {
     position: fixed;
     bottom: 0;
     left: 0;
     width: 100%;
     height: 45px;
-    background-color: #FFFFFF;
+    background-color: #F0F4F8;
     z-index: 999999;
     pointer-events: none;
 }
 
-/* Disable dropdown built-in search input mobile keyboard popup */
 div[data-baseweb="select"] input {
     caret-color: transparent !important;
 }
 
-/* Control widths and mobile 100% adaptation */
 div[data-baseweb="select"], .stSelectbox, .stSlider {
     width: 100% !important;
 }
 
-/* === 3. Button Styling Upgrades === */
+/* === 3. SCI-Paper UI Components (Cards & Header Blocks) === */
+.card-container {
+    background-color: #FFFFFF;
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+    margin-bottom: 20px;
+    border: 1px solid #E2E8F0;
+}
+
+.header-block {
+    background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%);
+    color: #FFFFFF;
+    padding: 12px 18px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 16px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    letter-spacing: -0.2px;
+    box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
+}
+
+/* === 4. Button Styling Upgrades === */
 div.stButton > button, div.stFormSubmitButton > button {
     background-color: #DC2626 !important;
     color: #FFFFFF !important;
@@ -140,12 +158,11 @@ div.stButton.secondary-btn > button:hover {
     color: #1F2937 !important;
 }
 
-/* === 4. Slider Customization === */
+/* === 5. Slider Customization === */
 div[data-baseweb="slider"] {
     padding-top: 10px;
     padding-bottom: 10px;
 }
-/* Slider Track and Thumb unification */
 .stSlider span[role="slider"] {
     background-color: #DC2626 !important;
     border-color: #DC2626 !important;
@@ -153,7 +170,7 @@ div[data-baseweb="slider"] {
     height: 16px !important;
 }
 
-/* === 5. Warning Box Refinement === */
+/* === 6. Warning Box Refinement === */
 .custom-warning-box {
     background-color: #FFF8E1;
     border-left: 4px solid #FFA000;
@@ -162,6 +179,7 @@ div[data-baseweb="slider"] {
     margin: 16px 0;
     color: #1a1a1a;
     font-size: 14px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.02);
 }
 .custom-warning-box b {
     color: #1a1a1a;
@@ -301,6 +319,7 @@ def init_session_state():
         "doctor_id": "",
         "ai_same_as_initial": False,
         "answered_image_ids": [],
+        "show_lightbox": False,
     }
     for k, v in default_states.items():
         if k not in st.session_state:
@@ -326,7 +345,7 @@ def load_gold_data_cached():
     except Exception as e:
         return None, f"Loading failed: {str(e)}"
 
-# === Random Case Sampling Rule Optimization (Excludes answered cases, ensures AI correct/incorrect ratio meets 6-7:3-4 requirement) ===
+# === Random Case Sampling Rule Optimization ===
 def load_balanced_test_set(df, completed_image_ids=None):
     if completed_image_ids is None:
         completed_image_ids = []
@@ -387,7 +406,7 @@ def save_results_to_gs():
 
         try:
             sheet.append_rows(rows)
-            st.success(f"✅ Successfully saved {len(rows)} records")
+            st.success("✅ Successfully saved records")
             return True
         except Exception as e:
             st.error(f"❌ Write failed: {str(e)}")
@@ -406,6 +425,7 @@ def reset_test_state():
     st.session_state.time_baseline = 0
     st.session_state.ai_same_as_initial = False
     st.session_state.question_start = None
+    st.session_state.show_lightbox = False
 
 # === Image Compression ===
 def compress_image(image_url):
@@ -468,9 +488,6 @@ def get_image_url_cached(image_id):
 
 # === Custom Grouped Selectbox Helper ===
 def grouped_selectbox(label, options_list, key, help_text=None, placeholder="Select Diagnosis"):
-    # Build flat options including grouped options format for streamlit selectbox with category headers or optgroups
-    # Streamlit selectbox doesn't natively support grouped optgroups directly in one simple call without custom options list, 
-    # so we provide formatted strings with clear headers or flat categorized labels
     flat_options = [placeholder]
     for group_name, diseases in DISEASE_GROUPS.items():
         flat_options.append(f"── {group_name} ──")
@@ -478,7 +495,6 @@ def grouped_selectbox(label, options_list, key, help_text=None, placeholder="Sel
             if d_name in options_list:
                 flat_options.append(d_name)
     
-    # Custom widget handler filtering out category headers
     selected = st.selectbox(label, flat_options, key=key, help=help_text)
     if selected and selected.startswith("──"):
         st.warning("Please select a valid disease category option, not a group header.")
@@ -487,6 +503,7 @@ def grouped_selectbox(label, options_list, key, help_text=None, placeholder="Sel
 
 # === Doctor Profile Page ===
 def profile_step():
+    st.markdown('<div class="card-container">', unsafe_allow_html=True)
     st.markdown("# AI-Assisted Dermatological Diagnosis Research Survey")
     st.markdown("""
 Dear Doctor:
@@ -495,7 +512,16 @@ This test consists of 10 multiple-choice questions and takes about 3-7 minutes t
 We will properly and strictly anonymize all your data, allowing your professional experience to make a greater impact.
 Once again, our sincere gratitude to you, and we wish you all the best!
 """)
-    st.markdown("### Step 1: Basic Information Collection (Anonymous)")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="card-container">', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="header-block">
+        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg>
+        Step 1: Basic Information Collection (Anonymous)
+    </div>
+    """, unsafe_allow_html=True)
+    
     with st.form("profile_form"):
         hospital_level = st.selectbox(
             "Professional Background",
@@ -546,6 +572,7 @@ Once again, our sincere gratitude to you, and we wish you all the best!
 
         st.session_state.step = "test"
         st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # === Test Question Page ===
 def test_step():
@@ -576,20 +603,53 @@ def test_step():
     if st.session_state.question_start is None:
         st.session_state.question_start = time.time()
 
+    # Progress & Title Card
+    st.markdown('<div class="card-container">', unsafe_allow_html=True)
     st.markdown(f"### Case Diagnosis - Question {idx+1} of {TEST_COUNT}")
     st.markdown(f"**Case {idx+1} / 10**")
     st.progress((idx+1)/TEST_COUNT)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown("### Lesion Image")
+    # Lesion Image Card
+    st.markdown('<div class="card-container">', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="header-block">
+        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+        Lesion Image
+    </div>
+    """, unsafe_allow_html=True)
+    
     img_url = get_image_url_cached(img_id)
     compressed_img = compress_image(img_url)
     
-    # Image container with expander/click-to-zoom modal support
     st.image(compressed_img, use_container_width=True)
-    with st.expander("🔍 Click to view high-resolution image in full screen"):
-        st.image(img_url, use_container_width=True)
 
-    st.markdown("### I. Independent Diagnosis")
+    # Lightbox Modal Integration via st.components.v1.html & Custom Button
+    if st.button("🔍 View Full Resolution"):
+        st.session_state.show_lightbox = True
+
+    if st.session_state.get("show_lightbox", False):
+        lightbox_html = f"""
+        <div id="custom-lightbox" style="position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.85);z-index:999999;display:flex;justify-content:center;align-items:center;cursor:pointer;" onclick="document.getElementById('custom-lightbox').style.display='none';">
+            <div style="position:relative; max-width:90%; max-height:90%;" onclick="event.stopPropagation();">
+                <img src="{img_url}" style="width:100%; height:auto; max-height:85vh; border-radius:8px; object-fit:contain; box-shadow: 0 10px 25px rgba(0,0,0,0.5);" />
+                <button onclick="document.getElementById('custom-lightbox').style.display='none';" style="position:absolute;top:-15px;right:-15px;background:#DC2626;color:white;border:none;border-radius:50%;width:36px;height:36px;font-size:18px;cursor:pointer;font-weight:bold;">&times;</button>
+            </div>
+        </div>
+        """
+        st.components.v1.html(lightbox_html, height=0)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Independent Diagnosis Card
+    st.markdown('<div class="card-container">', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="header-block">
+        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+        I. Independent Diagnosis
+    </div>
+    """, unsafe_allow_html=True)
+
     with st.form(f"initial_diagnosis_form_{idx}"):
         t1 = grouped_selectbox(
             "Primary Diagnosis",
@@ -638,9 +698,16 @@ def test_step():
                 st.session_state.ai_same_as_initial = (t1 == ai_lbl)
                 st.session_state.show_ai = True
                 st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
     if st.session_state.show_ai:
-        st.markdown("### II. AI-Assisted Decision Making")
+        st.markdown('<div class="card-container">', unsafe_allow_html=True)
+        st.markdown("""
+        <div class="header-block">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+            II. AI-Assisted Decision Making
+        </div>
+        """, unsafe_allow_html=True)
         
         init1, init2, init3 = st.session_state.initial_top
         same_with_ai = init1 == ai_lbl
@@ -745,7 +812,6 @@ def test_step():
                     st.rerun()
 
         else:
-            # Refactored Warning Box matching requirement #14 & #15
             st.markdown(f"""
             <div class="custom-warning-box">
                 <b>⚠️ Your diagnosis differs from the AI recommendation.</b><br>
@@ -862,7 +928,7 @@ def test_step():
                         "final_top2": final2,
                         "final_top3": final3,
                         "final_top4": final4,
-                        "is_final_top1_correct": is_final_top1_correct,
+                        "is_final_top1_correct": fin_ok,
                         "is_final_top3_correct": is_final_top3_correct,
                         "is_final_top4_correct": is_final_top4_correct,
                         "final_confidence": final_conf,
@@ -899,16 +965,20 @@ def test_step():
                     """, height=0)
 
                     st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # === Result Page ===
 def result_step():
+    st.markdown('<div class="card-container">', unsafe_allow_html=True)
     st.markdown("# Test Completed")
     st.success(f"Your Test ID: {st.session_state.doctor_id}")
     st.info("All data has been successfully written to Google Sheets. You can check the complete records in the spreadsheet.")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     if len(st.session_state.user_results) > 0:
         df = pd.DataFrame(st.session_state.user_results)
 
+        st.markdown('<div class="card-container">', unsafe_allow_html=True)
         st.markdown("### Diagnostic Accuracy Comparison")
         initial_acc = df["is_initial_top1_correct"].mean() * 100
         final_acc = df["is_final_top1_correct"].mean() * 100
@@ -918,7 +988,9 @@ def result_step():
         }, index=["Initial Diagnosis (Without AI)", "Final Diagnosis (AI-Assisted)"])
 
         st.bar_chart(acc_data, color="#3498db", width="stretch")
+        st.markdown('</div>', unsafe_allow_html=True)
 
+        st.markdown('<div class="card-container">', unsafe_allow_html=True)
         st.markdown("### AI Adoption Effectiveness Analysis")
         ai_used = df[df["use_ai"] == 1]
         ai_not_used = df[df["use_ai"] == 0]
@@ -932,7 +1004,9 @@ def result_step():
 
         st.bar_chart(ai_data, color="#e74c3c", width="stretch")
         st.caption(f"Adopted AI: {len(ai_used)} questions | Did not adopt AI: {len(ai_not_used)} questions")
+        st.markdown('</div>', unsafe_allow_html=True)
 
+        st.markdown('<div class="card-container">', unsafe_allow_html=True)
         st.markdown("### Summary of Core Metrics")
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -941,6 +1015,7 @@ def result_step():
             st.metric("Final Accuracy", f"{final_acc:.1f}%", delta=f"{final_acc-initial_acc:.1f}%")
         with col3:
             st.metric("AI Adoptions", len(ai_used))
+        st.markdown('</div>', unsafe_allow_html=True)
 
     if st.button("Restart Test", type="primary"):
         init_session_state()
