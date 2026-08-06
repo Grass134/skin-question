@@ -18,15 +18,72 @@ import datetime
 st.set_option('client.showErrorDetails', True)
 st.set_page_config(page_title="AI-Assisted Dermatological Diagnosis Research", page_icon="🩺", layout="centered")
 
-# Global CSS styles, pure white bottom mask, mobile keyboard optimization, and button styling
+# Global CSS styles, mobile responsiveness, typography, buttons, warning boxes, and UI polish
 st.markdown("""
 <style>
-/* Set page background to pure white */
+/* === 1. Global & Typography Styles === */
 .stApp {
     background-color: #FFFFFF !important;
+    color: #1a1a1a !important;
+    font-family: Inter, Roboto, Arial, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+    -webkit-font-smoothing: antialiased !important;
+    -moz-osx-font-smoothing: grayscale !important;
 }
 
-/* Pure white fixed bottom mask to cover the residual Streamlit banner in WeChat */
+/* Base text color & line heights */
+p, label, span, div, .stMarkdown {
+    color: #1a1a1a !important;
+    line-height: 1.6 !important;
+    font-family: Inter, Roboto, Arial, sans-serif !important;
+}
+
+/* Heading hierarchies & tight letter spacing */
+h1, h2, h3, h4, h5, h6 {
+    color: #1a1a1a !important;
+    font-family: Inter, Roboto, Arial, sans-serif !important;
+    letter-spacing: -0.3px !important;
+    line-height: 1.3 !important;
+}
+
+h1 {
+    font-weight: 700 !important;
+    font-size: 26px !important;
+}
+
+h2, h3 {
+    font-weight: 600 !important;
+}
+
+/* Mobile responsive heading adjustments */
+@media (max-width: 768px) {
+    h1 {
+        font-size: 20px !important;
+        word-break: normal !important;
+        overflow-wrap: normal !important;
+        white-space: normal !important;
+    }
+    h2, h3 {
+        font-size: 18px !important;
+    }
+    .main .block-container {
+        padding-left: 16px !important;
+        padding-right: 16px !important;
+    }
+}
+
+/* === 2. Streamlit Native Elements Clean-up === */
+#MainMenu, footer, header {visibility: hidden !important;}
+.stDeployButton {display: none !important;}
+div[data-testid="stToolbar"] {display: none !important;}
+div[data-testid="stDecoration"] {display: none !important;}
+div[data-testid="stStatusWidget"] {display: none !important;}
+
+/* Hide markdown header anchor links */
+h1 a, h2 a, h3 a, h4 a, h5 a, h6 a {
+    display: none !important;
+}
+
+/* Pure white fixed bottom mask */
 .streamlit-footer-mask {
     position: fixed;
     bottom: 0;
@@ -38,25 +95,76 @@ st.markdown("""
     pointer-events: none;
 }
 
-/* Disable dropdown built-in search input and mobile keyboard popup */
+/* Disable dropdown built-in search input mobile keyboard popup */
 div[data-baseweb="select"] input {
     caret-color: transparent !important;
 }
 
-/* Global styling for all submission and primary action buttons */
-div.stButton > button, div.stFormSubmitButton > button {
-    background-color: #E63946 !important;
-    color: #FFFFFF !important;
-    border-color: #E63946 !important;
-    font-weight: bold !important;
+/* Control widths and mobile 100% adaptation */
+div[data-baseweb="select"], .stSelectbox, .stSlider {
     width: 100% !important;
-    border-radius: 6px !important;
+}
+
+/* === 3. Button Styling Upgrades === */
+div.stButton > button, div.stFormSubmitButton > button {
+    background-color: #DC2626 !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    font-weight: 500 !important;
+    font-size: 15px !important;
+    width: 100% !important;
+    height: 48px !important;
+    border-radius: 12px !important;
+    box-shadow: 0 2px 4px rgba(220, 38, 38, 0.2);
+    transition: all 0.2s ease-in-out;
 }
 
 div.stButton > button:hover, div.stFormSubmitButton > button:hover {
-    background-color: #D62828 !important;
-    color: #FFFFFF !important;
-    border-color: #D62828 !important;
+    background-color: #B91C1C !important;
+    box-shadow: 0 4px 8px rgba(220, 38, 38, 0.3);
+    transform: translateY(-1px);
+}
+
+div.stButton > button:active, div.stFormSubmitButton > button:active {
+    transform: scale(0.98);
+}
+
+/* Secondary / Back button styling */
+div.stButton.secondary-btn > button {
+    background-color: #F3F4F6 !important;
+    color: #374151 !important;
+    border: 1px solid #D1D5DB !important;
+}
+div.stButton.secondary-btn > button:hover {
+    background-color: #E5E7EB !important;
+    color: #1F2937 !important;
+}
+
+/* === 4. Slider Customization === */
+div[data-baseweb="slider"] {
+    padding-top: 10px;
+    padding-bottom: 10px;
+}
+/* Slider Track and Thumb unification */
+.stSlider span[role="slider"] {
+    background-color: #DC2626 !important;
+    border-color: #DC2626 !important;
+    width: 16px !important;
+    height: 16px !important;
+}
+
+/* === 5. Warning Box Refinement === */
+.custom-warning-box {
+    background-color: #FFF8E1;
+    border-left: 4px solid #FFA000;
+    padding: 14px 18px;
+    border-radius: 8px;
+    margin: 16px 0;
+    color: #1a1a1a;
+    font-size: 14px;
+}
+.custom-warning-box b {
+    color: #1a1a1a;
 }
 </style>
 <div class="streamlit-footer-mask"></div>
@@ -81,12 +189,38 @@ LOCAL_GOOGLE_CREDENTIALS_FILE = "google_credentials.json"
 GITHUB_IMAGE_FOLDER = "experiment_pool"
 GITHUB_BRANCH = "main"
 
-# Disease Labels
-DISEASE_LABELS = {
-    "MEL": "Melanoma", "NV": "Nevus (Melanocytic Nevus)", "BCC": "Basal Cell Carcinoma", "AK": "Actinic Keratosis",
-    "BKL": "Benign Keratosis (e.g., Seborrheic Keratosis)", "DF": "Dermatofibroma", "VASC": "Vascular Lesion", "SCC": "Squamous Cell Carcinoma",
-    "Vitiligo": "Vitiligo", "Pityrasis-Alba": "Pityriasis Alba", "Psoriasis": "Psoriasis", "UNK": "Unknown Category"
+# Unified Disease Labels & Grouping Dictionary
+DISEASE_GROUPS = {
+    "Melanocytic Lesions": {
+        "MEL": "Melanoma",
+        "NV": "Nevus (Melanocytic Nevus)"
+    },
+    "Epithelial Tumors": {
+        "BCC": "Basal Cell Carcinoma",
+        "SCC": "Squamous Cell Carcinoma",
+        "AK": "Actinic Keratosis"
+    },
+    "Benign Lesions": {
+        "BKL": "Benign Keratosis",
+        "DF": "Dermatofibroma",
+        "VASC": "Vascular Lesion"
+    },
+    "Inflammatory/Other": {
+        "Vitiligo": "Vitiligo",
+        "Pityrasis-Alba": "Pityriasis Alba",
+        "Psoriasis": "Psoriasis"
+    },
+    "Unknown Category": {
+        "UNK": "Unknown Category"
+    }
 }
+
+# Flat Dictionary for reverse lookups
+DISEASE_LABELS = {}
+for group_dict in DISEASE_GROUPS.values():
+    for k, v in group_dict.items():
+        DISEASE_LABELS[k] = v
+
 ALL_CLASSES = list(DISEASE_LABELS.values())
 TEST_COUNT = 10
 
@@ -158,7 +292,7 @@ def init_session_state():
         "test_set": None,
         "doctor_info": {},
         "ai_suggestion": {},
-        "initial_top": ["Please Select", "N/A", "N/A"],
+        "initial_top": ["Select Diagnosis", "N/A", "N/A"],
         "initial_conf": 5,
         "final_top1": "", "final_top2": "", "final_top3": "", "final_top4": "",
         "final_conf": 5,
@@ -262,7 +396,7 @@ def save_results_to_gs():
 # === Single Question State Reset ===
 def reset_test_state():
     st.session_state.show_ai = False
-    st.session_state.initial_top = ["Please Select", "N/A", "N/A"]
+    st.session_state.initial_top = ["Select Diagnosis", "N/A", "N/A"]
     st.session_state.initial_conf = 5
     st.session_state.final_top1 = ""
     st.session_state.final_top2 = ""
@@ -332,9 +466,28 @@ def get_image_url_cached(image_id):
     fallback = random.choice(["ISIC_0034334", "ISIC_0034402", "ISIC_0034411"])
     return f"{base}{GITHUB_IMAGE_FOLDER}/{fallback}.jpg"
 
+# === Custom Grouped Selectbox Helper ===
+def grouped_selectbox(label, options_list, key, help_text=None, placeholder="Select Diagnosis"):
+    # Build flat options including grouped options format for streamlit selectbox with category headers or optgroups
+    # Streamlit selectbox doesn't natively support grouped optgroups directly in one simple call without custom options list, 
+    # so we provide formatted strings with clear headers or flat categorized labels
+    flat_options = [placeholder]
+    for group_name, diseases in DISEASE_GROUPS.items():
+        flat_options.append(f"── {group_name} ──")
+        for d_code, d_name in diseases.items():
+            if d_name in options_list:
+                flat_options.append(d_name)
+    
+    # Custom widget handler filtering out category headers
+    selected = st.selectbox(label, flat_options, key=key, help=help_text)
+    if selected and selected.startswith("──"):
+        st.warning("Please select a valid disease category option, not a group header.")
+        return placeholder
+    return selected
+
 # === Doctor Profile Page ===
 def profile_step():
-    st.title("🩺 AI-Assisted Dermatological Diagnosis Research Survey")
+    st.markdown("# AI-Assisted Dermatological Diagnosis Research Survey")
     st.markdown("""
 Dear Doctor:
 Thank you for taking time out of your busy clinical schedule to participate in this survey!
@@ -342,12 +495,12 @@ This test consists of 10 multiple-choice questions and takes about 3-7 minutes t
 We will properly and strictly anonymize all your data, allowing your professional experience to make a greater impact.
 Once again, our sincere gratitude to you, and we wish you all the best!
 """)
-    st.subheader("Step 1: Basic Information Collection (Anonymous)")
+    st.markdown("### Step 1: Basic Information Collection (Anonymous)")
     with st.form("profile_form"):
         hospital_level = st.selectbox(
-            "Hospital Level",
-            ["Tertiary Grade A Hospital Specialist", "Secondary Hospital Specialist", "Community Hospital / Intern"],
-            help="Please select your practicing hospital level"
+            "Professional Background",
+            ["Tertiary-A Hospital Dermatologist", "Secondary Hospital Dermatologist", "Community Hospital / Resident Physician"],
+            help="Please select your practicing hospital level and professional background"
         )
         work_years = st.selectbox(
             "Years of Dermatological Practice",
@@ -356,20 +509,20 @@ Once again, our sincere gratitude to you, and we wish you all the best!
         )
         daily_patients = st.selectbox(
             "Average Daily Dermatological Patients",
-            ["<=15 cases", "15-30 cases", ">30 cases", "No Outpatient Experience"],
+            ["<=15 patients", "15-30 patients", ">30 patients", "No Outpatient Experience"],
             help="Please select your average daily patient volume range"
         )
         prior_ai_trust = st.selectbox(
-            "Initial Trust in AI-Assisted Diagnosis (Score 1-10)",
+            "Initial Confidence in AI-Assisted Diagnosis (Score 1-10)",
             options=list(range(1, 11)),
             index=4,
             help="1: Completely distrust, 10: Completely trust"
         )
 
-        submit_btn = st.form_submit_button("✅ Submit Information and Start Test")
+        submit_btn = st.form_submit_button("Submit & Start Test")
 
     if submit_btn:
-        prefix = "A" if "Tertiary" in hospital_level else "B" if "Secondary" in hospital_level else "C"
+        prefix = "A" if "Tertiary-A" in hospital_level else "B" if "Secondary" in hospital_level else "C"
         doctor_id = f"{prefix}_DR_{uuid.uuid4().hex[:6].upper()}"
         st.session_state.doctor_id = doctor_id
 
@@ -423,26 +576,47 @@ def test_step():
     if st.session_state.question_start is None:
         st.session_state.question_start = time.time()
 
-    st.title(f"📷 Case Diagnosis - Question {idx+1} of {TEST_COUNT}")
+    st.markdown(f"### Case Diagnosis - Question {idx+1} of {TEST_COUNT}")
+    st.markdown(f"**Case {idx+1} / 10**")
     st.progress((idx+1)/TEST_COUNT)
 
-    st.subheader("Lesion Image")
+    st.markdown("### Lesion Image")
     img_url = get_image_url_cached(img_id)
     compressed_img = compress_image(img_url)
+    
+    # Image container with expander/click-to-zoom modal support
     st.image(compressed_img, use_container_width=True)
+    with st.expander("🔍 Click to view high-resolution image in full screen"):
+        st.image(img_url, use_container_width=True)
 
     st.markdown("### I. Independent Diagnosis")
     with st.form(f"initial_diagnosis_form_{idx}"):
-        t1 = st.selectbox(
+        t1 = grouped_selectbox(
             "Primary Diagnosis",
-            ["Please Select"] + ALL_CLASSES,
+            ALL_CLASSES,
             key=f"t1_{idx}",
-            help="Please select your most likely diagnosis (Required)"
+            help_text="Please select your most likely primary diagnosis from the categorized list (Required)",
+            placeholder="Select Diagnosis"
         )
-        t2_opt = ["N/A"] + [x for x in ALL_CLASSES if x != t1]
-        t2 = st.selectbox("Secondary Diagnosis", t2_opt, key=f"t2_{idx}")
-        t3_opt = ["N/A"] + [x for x in ALL_CLASSES if x not in [t1, t2]]
-        t3 = st.selectbox("Tertiary Diagnosis", t3_opt, key=f"t3_{idx}")
+        
+        t2_options = ["N/A"] + [x for x in ALL_CLASSES if x != t1]
+        t2 = grouped_selectbox(
+            "Secondary Diagnosis",
+            t2_options,
+            key=f"t2_{idx}",
+            help_text="Optional secondary differential diagnosis",
+            placeholder="N/A"
+        )
+        
+        t3_options = ["N/A"] + [x for x in ALL_CLASSES if x not in [t1, t2]]
+        t3 = grouped_selectbox(
+            "Tertiary Diagnosis",
+            t3_options,
+            key=f"t3_{idx}",
+            help_text="Optional tertiary differential diagnosis",
+            placeholder="N/A"
+        )
+        
         conf_i = st.slider(
             "Confidence in This Diagnosis (Score 1-10)",
             1, 10, 5,
@@ -450,10 +624,10 @@ def test_step():
             help="1: Completely uncertain, 10: Completely certain"
         )
 
-        submit_initial = st.form_submit_button("🔍 Submit Diagnosis & View AI Recommendation")
+        submit_initial = st.form_submit_button("Submit & View AI Suggestion")
         if submit_initial:
-            if t1 == "Please Select":
-                st.error("Please select at least the primary diagnosis before submitting")
+            if t1 == "Select Diagnosis" or t1.startswith("──"):
+                st.error("Please select a valid primary diagnosis before submitting")
             else:
                 time_baseline = round(time.time() - st.session_state.question_start, 2)
                 st.session_state.time_baseline = time_baseline
@@ -467,20 +641,30 @@ def test_step():
 
     if st.session_state.show_ai:
         st.markdown("### II. AI-Assisted Decision Making")
-        st.info(f"🤖 AI Diagnostic Recommendation: **{ai_lbl}**")
-
+        
         init1, init2, init3 = st.session_state.initial_top
         same_with_ai = init1 == ai_lbl
 
         if same_with_ai:
-            st.success(f"✅ Your initial diagnosis matches the AI recommendation: {init1}")
+            st.success(f"Your initial diagnosis matches the AI recommendation: {init1}")
             with st.form(f"final_decision_form_{idx}"):
                 final_conf = st.slider(
                     "Final Diagnosis Confidence (Score 1-10)",
                     1, 10, st.session_state.initial_conf,
-                    key=f"cf_{idx}"
+                    key=f"cf_{idx}",
+                    help="Rate your confidence after reviewing AI alignment"
                 )
-                submit_final = st.form_submit_button("✅ Confirm Final Diagnosis & Proceed to Next Question")
+                
+                col_back, col_submit = st.columns([1, 3])
+                with col_back:
+                    back_btn = st.form_submit_button("Back", help="Return to modify initial diagnosis")
+                with col_submit:
+                    submit_final = st.form_submit_button("Confirm & Next Case")
+
+                if back_btn:
+                    st.session_state.show_ai = False
+                    st.rerun()
+
                 if submit_final:
                     t_post = round(time.time() - st.session_state.question_start, 2)
                     gain = final_conf - st.session_state.initial_conf
@@ -561,7 +745,14 @@ def test_step():
                     st.rerun()
 
         else:
-            st.warning(f"⚠️ Your initial diagnosis ({init1}) differs from the AI recommendation ({ai_lbl})")
+            # Refactored Warning Box matching requirement #14 & #15
+            st.markdown(f"""
+            <div class="custom-warning-box">
+                <b>⚠️ Your diagnosis differs from the AI recommendation.</b><br>
+                Yours: <b>{init1}</b> &nbsp;|&nbsp; AI suggests: <b>{ai_lbl}</b>
+            </div>
+            """, unsafe_allow_html=True)
+            
             ai_in_top3 = ai_lbl in [init1, init2, init3]
 
             with st.form(f"final_decision_form_{idx}"):
@@ -569,13 +760,15 @@ def test_step():
                     act = st.radio(
                         "AI suggestion is not in your top three diagnoses. Your choice is:",
                         ["Maintain Original Diagnosis", "Replace as Primary (Top 1)", "Add as 4th Diagnosis"],
-                        key=f"act_{idx}"
+                        key=f"act_{idx}",
+                        help="Choose how to incorporate or override with the AI suggestion"
                     )
                 else:
                     act = st.radio(
                         "Final Decision Choice",
                         ["Maintain Original Diagnosis", "Replace as Primary (Top 1)"],
-                        key=f"act_{idx}"
+                        key=f"act_{idx}",
+                        help="Choose whether to adopt AI suggestion already present in top differentials"
                     )
 
                 final4 = "N/A"
@@ -620,10 +813,20 @@ def test_step():
                 final_conf = st.slider(
                     "Final Diagnosis Confidence (Score 1-10)",
                     1, 10, st.session_state.initial_conf,
-                    key=f"cf_{idx}"
+                    key=f"cf_{idx}",
+                    help="Final confidence score after evaluating the AI recommendation"
                 )
 
-                submit_final = st.form_submit_button("✅ Confirm Final Diagnosis & Proceed to Next Question")
+                col_back, col_submit = st.columns([1, 3])
+                with col_back:
+                    back_btn = st.form_submit_button("Back", help="Return to modify initial diagnosis")
+                with col_submit:
+                    submit_final = st.form_submit_button("Confirm & Next Case")
+
+                if back_btn:
+                    st.session_state.show_ai = False
+                    st.rerun()
+
                 if submit_final:
                     t_post = round(time.time() - st.session_state.question_start, 2)
                     gain = final_conf - st.session_state.initial_conf
@@ -699,14 +902,14 @@ def test_step():
 
 # === Result Page ===
 def result_step():
-    st.title("📊 Test Completed")
+    st.markdown("# Test Completed")
     st.success(f"Your Test ID: {st.session_state.doctor_id}")
     st.info("All data has been successfully written to Google Sheets. You can check the complete records in the spreadsheet.")
 
     if len(st.session_state.user_results) > 0:
         df = pd.DataFrame(st.session_state.user_results)
 
-        st.subheader("📈 Diagnostic Accuracy Comparison")
+        st.markdown("### Diagnostic Accuracy Comparison")
         initial_acc = df["is_initial_top1_correct"].mean() * 100
         final_acc = df["is_final_top1_correct"].mean() * 100
 
@@ -716,7 +919,7 @@ def result_step():
 
         st.bar_chart(acc_data, color="#3498db", width="stretch")
 
-        st.subheader("💡 AI Adoption Effectiveness Analysis")
+        st.markdown("### AI Adoption Effectiveness Analysis")
         ai_used = df[df["use_ai"] == 1]
         ai_not_used = df[df["use_ai"] == 0]
 
@@ -730,7 +933,7 @@ def result_step():
         st.bar_chart(ai_data, color="#e74c3c", width="stretch")
         st.caption(f"Adopted AI: {len(ai_used)} questions | Did not adopt AI: {len(ai_not_used)} questions")
 
-        st.subheader("📊 Summary of Core Metrics")
+        st.markdown("### Summary of Core Metrics")
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Initial Accuracy", f"{initial_acc:.1f}%")
@@ -739,7 +942,7 @@ def result_step():
         with col3:
             st.metric("AI Adoptions", len(ai_used))
 
-    if st.button("🔄 Restart Test", type="primary"):
+    if st.button("Restart Test", type="primary"):
         init_session_state()
         st.components.v1.html("""
             <script>
